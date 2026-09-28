@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.0.1 (2026-09-28)
+
+### 修复
+
+- **★ License 绕过漏洞（Release 版，自 v1.0.0 起存在）**：`src/repl.c` 里 license 校验被套在
+  `if (ctx->config_loaded)` 中，于是**只要没有 `config.dul`**（删掉它、或把二进制换到别的目录运行），
+  整段校验就被跳过 —— Release 版无需任何 license 即可使用全部功能（`unload dict` / `unload table` /
+  `recover` / `logminer` 全部照跑）。现改为**无条件校验**：`config.dul` 所在目录只用于**定位** `license.dul`，
+  找不到 config 时回落到可执行文件所在目录，再回落 `.`。失败仍进受限模式（`license request` 逃生通道保留）。
+
+- **`unload dict` 报 `Invalid num_mappings: 63 (max: 62)`**（`src/dictionary/filenode_map.c`）
+  `pg_filenode.map` 解析把老格式的上限写死成 62，导致合法 map 被拒。实际各内核上限不同：
+  PG ≤15 / openGauss 老格式 = 62（512 B）、**VastBase G100 2.2.5 = 63（520 B，客户现场命中）**、
+  PG 16+ / v2,v5 = 64（524 B）、openGauss 4KB = 510（4096 B）。现老格式统一按 **64** 放行。
+  报错信息补充 `file_size` / `format` 便于定位。
+  ⚠ 该错误在 `unload dict` 中**不中断**（只 WARN 并退回 `filenode=relid` 兜底），
+  后果是整份 global map 被丢弃、系统表 filenode 全错（实测 pg_database 变成 `1262→1262`，
+  真值 `1262→15984`）——遇到此错修复后**必须重跑**。
+
+- **字典文件空字段解析**（`filesystem/disk/vg/pv/lv` 共 7 处读，新增 `util/strutil.c: vbdul_split_pipe`）
+
+- **XFS B+tree 内部节点指针偏移**：ptrs 起始位置按 `maxrecs` 计算、指针个数用 `numrecs`
+  （原先按 `numrecs+1` 读，导致 `Invalid btree magic 0x0` 且静默返回 0 条）；
+  含 3 处递归共用 buffer、is_v5 误判一并修复。204 真 XFS 实测 1505 条与 `xfs_db` ground truth 对齐。
+
+- **aarch64 包携带工具链指纹**（`package.sh`）：宿主 `strip` 无法处理交叉编译的 aarch64 ELF
+  （`Unable to recognise the format of the input file`），而该行以 `|| true` 结尾 ⇒ 失败被静默吞掉，
+  arm64 包一直带着 `GCC: (...)` 指纹发出去（x86 因宿主即本架构所以一直是干净的）。
+  现按架构选用 `aarch64-linux-gnu-strip/objcopy`；又因 upx 4.2.2 无法压缩被删过节区的 aarch64 ELF
+  （`CantPackException: xspan unexpected NULL pointer`），改为 `objcopy --update-section .comment=/dev/null`
+  抹空内容（保留节头）。
+- **打包流程加硬门**：upx 缺失 / UPX 打包失败 / 工具链指纹残留 ⇒ 直接报错退出，不再静默产出
+  未压缩或带指纹的包。
+
+### 变更
+
+- **Beta / 发布版标志分离**：版本串不再硬编码 `"Beta x.y.z"`（旧版发布版会显示 `Beta 1.0.0 (Release)`，
+  两个标志互相矛盾、无法辨别包类型）。现版本串只含版本号（`1.0.1`），由 `VBDUL_BETA` 在 banner 与
+  `--version` 里追加标志：Beta 构建显示 `1.0.1 (BETA)`，发布构建显示 `1.0.1 (Release)`；
+  版本串从 `VBDUL_VERSION_*` 自动拼接，避免手工漂移。
+
 ## v1.0.0 (2026-06-26)
 
 首个正式版本。
