@@ -9,7 +9,7 @@ vbdul 是一款数据库应急数据恢复工具（类似 Oracle ODU），支持
 
 到 [Releases](https://github.com/LiXiangYu0612/vbdul/releases/latest) 下载对应架构的安装包（静态编译 + UPX 压缩，零运行时依赖，解压即用）：
 
-`vbdul-1.0.1-x86_64.tar.gz` / `vbdul-1.0.1-aarch64.tar.gz`
+`vbdul-1.1.0-x86_64.tar.gz` / `vbdul-1.1.0-aarch64.tar.gz`
 
 ## 授权（License）
 
@@ -37,7 +37,7 @@ vbdul> license show             # 查看授权状态
 
 | 维度 | 支持 |
 |------|------|
-| 数据库 | VastBase v0/v1/v2/v3/v5（PG11/PG14/PG16/openGauss 6.0/PG17 内核）、PostgreSQL 11~17 |
+| 数据库 | VastBase v0/v1/v2/v3/v5/v6（PG11/PG14/PG16/openGauss 6.0/PG17/G100 2.2.5 内核）、PostgreSQL 11~17 |
 | 文件系统 | ext4（inode/extent/空闲块）、XFS（AGFL/BNO B+tree/RMAP）、LVM（VG/PV/LV 聚合） |
 | 平台 | Linux x86_64、Linux aarch64 |
 | 存储引擎 | Heap（行存）；ustore/cstore 暂不支持 |
@@ -47,16 +47,16 @@ vbdul> license show             # 查看授权状态
 ## 快速开始
 
 ```bash
-tar xzf vbdul-1.0.1-x86_64.tar.gz && cd vbdul-1.0.1-x86_64
+tar xzf vbdul-1.1.0-x86_64.tar.gz && cd vbdul-1.1.0-x86_64
 ```
 
 编辑 `config.dul` 指定数据目录与数据库：
 
 ```
 db_type     vastbase        # 或 postgresql
-db_version  v3              # vastbase: v0/v1/v2/v3/v5
+db_version  v3              # vastbase: v0/v1/v2/v3/v5/v6
 data_dir    /home/vastbase/data/vastbase
-database    dultest
+database    dultest         # 留空 = 多库模式（v1.1.0，见下节）
 wal_dir     /home/vastbase/data/vastbase/pg_xlog   # logminer 需要
 backup_dir  /backup                                  # ProBackup 恢复需要
 ```
@@ -67,6 +67,23 @@ vbdul> list table '%orders%'          # 模糊找表
 vbdul> desc public.orders             # 查看表结构
 vbdul> unload table public.orders     # 导出数据（COPY 格式，可直接 psql 导入）
 ```
+
+## 多库支持（v1.1.0）
+
+`database` 留空即进入多库模式：`unload dict` 一次构建全部库的字典，命令用 `db <name>` 子句选库；导出文件带库名前缀（`mydb_public_orders.txt`）互不覆盖。
+
+```
+vbdul> unload dict                          # 一次构建全部库的字典
+vbdul> list db                              # 列出实例内所有数据库
+vbdul> list schema db mydb                  # 列出库内 schema
+vbdul> desc public.orders db mydb           # 查看表结构
+vbdul> unload table public.orders db mydb   # 导出单表
+vbdul> unload db mydb                       # 批量导出整库（expdp 风格输出）
+vbdul> unload db all                        # 全部库（db_all_exclude 可配排除名单）
+vbdul> imp table public.orders db mydb      # 生成导入脚本
+```
+
+`db <name>` 同样适用于 `unload schema` / `verify table` / `dump` / `imp` / `restore` / `recover table` / `logminer`。`database` 有值则保持 v1.0.1 单库行为，命令不带 `db` 子句。
 
 ## DROP TABLE / TRUNCATE 恢复（无备份）
 

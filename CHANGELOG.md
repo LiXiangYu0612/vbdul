@@ -1,5 +1,96 @@
 # Changelog
 
+## v1.1.0 (2026-09-30)
+
+本版本主体是**多库支持**：一个实例几十个库一次处理，`unload dict` 建全部库字典，
+凡涉及库内对象的命令加 `db <name>` 子句；同时并入 **db_version v6（VastBase G100
+2.2.5）** 版本档与自定义表空间定位，并修复 v1.0.1 的 `imp` 必崩 SIGSEGV 等问题。
+
+### 新增 — 多库支持
+
+- **字典多库布局**：`config.dul` 的 `database` 留空即进入多库模式，`unload dict`
+  一次循环构建全部库的字典——库级字典按 `dict/<dboid>/*.dul` 分库存放，顶层只放
+  共享/实例级字典（`db.dul`、`disk.dul`、`ext4_*.dul` 等）；文件格式一个字节未改。
+  `database` 有值则完全保持 v1.0.1 单库行为（平铺布局、命令可不带 `db`）。
+  单库失败可见化（`obj.dul` 哨兵机制，跑前清、跑后验），不再假报完成。
+
+- **`db <name>` 子句**（多库模式）覆盖全部库内对象命令：`desc` / `list schema` /
+  `list table <schema>` / `unload table` / `unload schema` / `verify table` /
+  `dump filenodeid` / `imp` / `restore` / `recover table` / `logminer`。
+  子句解析在分词前统一剥离，按命令白名单门控、引号感知。
+
+- **`list db`**（`list database` 别名）：列出实例内全部数据库。
+
+- **`unload db <spec> [meta|data]`**：批量导出整库/多库。spec 支持
+  `all`（减去排除名单，执行前列清单要 `y` 确认）、`a,b,c` 显式列表（不受名单影响）、
+  `<spec> except x,y`。`meta` 只导 DDL，`data` 只导数据。输出为 expdp 风格
+  （库头 + schema 缩进 + 每表 `DDL:`/`. . exported` 两行 + 收尾统计）。
+
+- **输出文件 `<db>_` 前缀**：多库模式下导出文件统一带库名前缀
+  （`mydb_public_orders.txt`），避免多库互相覆盖；单库模式保持 v1.0.1 原文件名。
+
+- **`db_all_exclude` 配置**：`unload dict` / `unload db all` / `list schema|table db`
+  跳过的库名单（默认 `template0,template1,template2,postgres,vastbase,atlasdb`），
+  显式点名不受影响。
+
+- **`unload dict using db.dul` 引导路径**：`global/pg_filenode.map` 定位不到
+  `pg_database` 时手写 `db.dul` 当种子再解析各库——与 `config.database` 无关，
+  两种 dict 布局都能跑（原先 `config.database` 非空的硬要求是 bug，已去除）。
+
+### 新增 — 版本与表空间
+
+- **db_version v6 = VastBase G100 2.2.5 版本档**：独立 catalog 表集（44 表）与
+  type_map（2.2.5 无 oradate，`date` 回 4 字节 OID1082；name 列 64 字节）。
+  未知 `db_version` 从静默回落 v3 改为响亮报错退出。
+
+- **自定义表空间定位**：表不在 `pg_default` 时按 `base/<dboid>/<filenode>` →
+  `pg_tblspc/<tsoid>` 软链接多路径解析；定位不到时清单式报出尝试过的路径。
+  heap 数据文件缺失从**静默成功（0 行）**改为响亮失败，批量导出继续其余表并在
+  收尾行计数（`N tables exported, M failed`）。
+
+### 修复
+
+- **`imp` 一执行就 SIGSEGV（v1.0.1 起存在，本版必修）**：`VbdulImportEntry×4096`
+  的三个 ≈9.9MB 栈数组远超 8MB 线程栈，`imp` 任何形态（`all`/`schema`/`table`）
+  必崩。改堆分配 + OOM 检查。
+
+- **logminer XID 恢复输出判别误吞 WAL 段名**：判据"首段全数字"把 24 位十六进制
+  WAL 段名也当 XID（如 `000000010000001300000010`），原始输出被静默跳过。补
+  十进制位数上界（≤10 位）。
+
+- **pg_logminer 跨库 WAL 混入**：过滤用 `first_db_oid`（多库模式下恒 0）导致
+  其他库的 WAL 记录混进输出，改为按当前选中库的 `ctx->db_oid` 过滤。
+
+- **display/导入路径旧账**：4 个 display 函数 `malloc` 无 NULL 检查、
+  `type_display[64]` 无界 `strcpy`、`desc_backup` 的 `strncpy` 不补 NUL——全部加固。
+
+- **pg_partition 解析绕过版本分派**：回调硬编码 v3 列下标，v6 等其它版本档
+  会读错列；改为走版本分派 + 按列名取字段。`pg_drop.h` 把"vastbase 且非 v3"
+  误分类为 PG 内核（v6 会拿到 24 字节 PG 页头）一并修正。
+
+- **`run()` 双 `fclose` UB** 与导出 `.sql` 无 `ferror` 检查：补 NULL 复位与写错检查。
+
+- **命令失败映射进程退出码**：EOF 返回最后一条真实命令的状态（`exit`/`quit`
+  不抹状态），未知命令/被 license 拦截 = 非 0；`license show` 恒 0。便于脚本化。
+
+### 变更
+
+- **`unload dict` 输出调整**：`template0`/`template1` 静默跳过建字典（`db.dul`
+  仍列出）；每库开头一行 `unload db <名> (oid <oid>) dict:`；文件系统级字典行数块
+  加头 `unload filesystem meta:`。
+
+- **`utl_file_dir` 表全局排除**（VB utl_file 兼容包自建表）：`unload schema` 数据
+  循环、DDL 枚举、`unload db` 清单计数三个口径一致排除；显式 `unload table` 点名
+  仍可导出。
+
+- **`unload db` 清单只计表数**，不再带数据量预估。
+
+### 兼容性
+
+- 单库模式（`config.dul` 的 `database` 有值）行为与 v1.0.1 逐字节对齐
+  （204 三环境 A/B 实测：v0/v3/v5 字典与导出文件 md5 全等）。
+- license 校验逻辑与 v1.0.1 一致（版本升级不作废 license；仍为无条件校验）。
+
 ## v1.0.1 (2026-09-28)
 
 ### 修复
