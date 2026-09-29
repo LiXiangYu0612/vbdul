@@ -79,7 +79,9 @@ vbdul> list schema db mydb                  # 列出库内 schema
 vbdul> desc public.orders db mydb           # 查看表结构
 vbdul> unload table public.orders db mydb   # 导出单表
 vbdul> unload db mydb                       # 批量导出整库（expdp 风格输出）
+vbdul> unload db a,b,c [meta|data]          # 显式列表；meta 只导 DDL，data 只导数据
 vbdul> unload db all                        # 全部库（db_all_exclude 可配排除名单）
+vbdul> unload db all except olddb,tmpdb     # all 之上再排除（与 db_all_exclude 并集）
 vbdul> imp table public.orders db mydb      # 生成导入脚本
 ```
 
