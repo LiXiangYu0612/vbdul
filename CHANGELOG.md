@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.1.4 (2026-10-02)
+
+坏输入加固版：156 真机全链复核（三轮）抓出的坏元数据/坏页崩溃向量
+与诊断纠偏，全部新旧二进制对照实证后收录；并修 imp 闭环的数据
+转义缺陷。
+
+### 修复
+
+- **★导出值未按 COPY text 转义（imp 闭环数据错列/丢行）**：值含分隔符
+  `|`、换行、反斜杠时原样写出行文件，`\copy` 导入必错列或整表失败。
+  按 PG COPY text 规范转义（`\|`、`\n`、`\r`、`\\`），NULL 的 `\N`
+  原样直通。156（VastBase G100 3.0.9）与 204（PG17.7 + G100 3.0.8）
+  三实例 unload→imp→导入回环逐位一致（含管道符/换行/反斜杠/中文/
+  单引号/NULL 边界全套）。
+
+- **imp 静默截断两处**：导入条目 4096 上限与 schema 256 上限触发时
+  无声丢表/丢 DDL —— 补响亮 WARN。
+
+- **★recover_toast 诊断段：坏长度字无界 memcpy 栈溢出 + 尺寸虚胖**：
+
+- **★recover_toast 诊断段：坏长度字无界 memcpy 栈溢出 + 尺寸虚胖**：
+  chunk 长度记的是含 varlena 头总长而 memcpy 从头后起 —— 坏页 4B
+  长度字（可达 ~2^30）直接 SIGABRT（glibc FORTIFY 实拍）；正常路径
+  resolved_size 每 chunk 虚报 +4/+1。改为净载荷语义 + 元组边界/来源
+  页界双侧校验。
+
+- **★TOAST chunk 载荷未按 TOAST_MAX_CHUNK_SIZE 封顶（栈写溢出）**：
+  `read_chunk_from_tuple`（VB/PG 两版）只按元组长（≤8K）封，坏页/
+  误分类页里 >2K 的伪 chunk 会溢出读侧 ~2K 栈缓冲。真 chunk 恒
+  ≤2K（内核切片保证），封顶后 156 真机 TOAST 恢复链零回归。
+
+- **内联 datum 无上界越页读**：resolve 内联分支坏 4B 头可解出巨量
+  len。内联 datum 恒 ≤ 一页（内核约束），封 BLCKSZ。（上游 parse
+  层本有拦截，本条为纵深防御。）
+
+- **行指针边界两处**：`get_vb_page_range` 缺 lp_len≥28 下界（小
+  lp_len 坏行指针头字段读越页，ASAN 实拍）；`try_parse_tuple_with_ddl`
+  缺 lp_off+lp_len≤BLCKSZ 上界（该函数当前无调用方，防御性修复）。
+
+### 验证
+
+156 真机 XFS 全链（unload dict → scan 13.4GB/78,595 页 → extract →
+unload recover）：恢复内容与远代基线逐字节一致（零回归）；纯未对齐
+单表场景 v1.1.2 丢全部 TOAST 数据 vs 本版全数收回（真机对照实锤）。
+8 项缺陷新旧二进制运行时对照实证，2 项实测不可触发（如实计为加固）。
+
 ## v1.1.3 (2026-10-02)
 
 复核收尾版：二轮"万无一失"复核抓出的三个缺陷 —— 含一个从 v1.1.1 起
