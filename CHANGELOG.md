@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.1.1 (2026-10-01)
+
+修复版：XFS 恢复实测（172.16.53.156 全链验证）暴露的一批真缺陷。
+
+### 修复
+
+- **★TOAST 指针裸扫误检吞行**：表导出/恢复路径用裸字节扫描 `01 12` 识别
+  外部 TOAST 指针，无字段边界感知 —— 行首 int4 字段值形如 0x??0112 的行
+  （实测 id=4609/70145/1053185/1118721 全中招）被误分流甚至彻底丢失。
+  判定收敛为共享 `vbdul_va_is_external_ondisk()`（4 对齐 + rawsize/extsize/
+  valueid 结构不变量），两处扫描点统一走同一实现。
+
+- **★XFS `scan filesystem`：drop 后元数据未落盘导致漏扫**：XFS unlink 不
+  释放 extents（挂在 AGI unlinked 链上推迟到 inode 回收），`sync()` 不触发
+  回收 —— 磁盘 bnobt/AGI/inode fork 长期旧态，扫描实测只覆盖 10%。
+  现在 `unload dict` 在写 XFS 元数据快照**之前**自动 sync + drop_caches +
+  sync（需 root；非 root 打警告），实测覆盖 10% → 100%。
+
+- **XFS 并发扫描互删临时文件**：两个 vbdul 同时扫同一 dict 目录时，一方
+  收尾 remove 共享 `.xfs_free_ext_single.tmp`，另一方 `system(sort)` 随即
+  读不到（`sort: cannot read` → 退化 in-memory merge）。tmp 文件名加 PID
+  隔离，双进程并发实测零报错。
+
+- **`xfs_free_ext.dul` 打印语义**：原先打印的是 VB 页计数却标 "rows"，
+  现在打印文件真实行数（合并组数）与页数两个字段：`56 rows (78675 pages)`。
+
+- **`unload dict` 全库被排除时假成功**：pg_database 有库但全部被
+  `db_all_exclude`/模板跳过时，此前打印 "built for 0 database(s)" 返回 0；
+  现在明确报错（点名库数与排除名单）非 0 退出。
+
+- **BTREE fork 解析**：XFS inode 的 bmap btree fork 此前 "not implemented"
+  直接返回空（大表 inode 全部丢失），补上真实 btree 遍历（BMDR ptrs 按
+  maxrecs 偏移，复用目录扫描路径的收集器）。
+
 ## v1.1.0 (2026-09-30)
 
 本版本主体是**多库支持**：一个实例几十个库一次处理，`unload dict` 建全部库字典，
@@ -53,6 +87,10 @@
 - **`imp` 一执行就 SIGSEGV（v1.0.1 起存在，本版必修）**：`VbdulImportEntry×4096`
   的三个 ≈9.9MB 栈数组远超 8MB 线程栈，`imp` 任何形态（`all`/`schema`/`table`）
   必崩。改堆分配 + OOM 检查。
+
+- **`unload dict` 全部库被排除时假成功**：pg_database 有库但全被
+  `db_all_exclude`/模板跳过时，此前打 `Dictionary built for 0 database(s)` 返回
+  0；现明确报错（点名库数与排除名单）非 0 退出。
 
 - **logminer XID 恢复输出判别误吞 WAL 段名**：判据"首段全数字"把 24 位十六进制
   WAL 段名也当 XID（如 `000000010000001300000010`），原始输出被静默跳过。补
