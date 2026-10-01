@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.1.2 (2026-10-02)
+
+热修版：复核抓出的两个真缺陷 —— v1.1.1 引入的 BTREE fork 崩溃路径，与
+TOAST 误检修复当时漏数的两处扫描点。
+
+### 修复
+
+- **★`scan filesystem` 崩溃（BTREE fork NULL 解引用）**：v1.1.1 补的
+  bmap btree fork 真遍历在 `xfs_parse_inode_extents_ex` 的 BTREE 分支
+  无条件解引用 ctx，而兼容入口（`xfs_parse_inode_extents`）恒传 NULL ——
+  损坏/已删的 BTREE 格式目录 inode 走目录扫描两个 fallback 路径时直接
+  SIGSEGV。无 ctx 时改为优雅返回空 extents（并补上已分配缓冲的 free）。
+
+- **★TOAST 指针裸扫误检（v1.1.1 漏数的 2/4）**：v1.1.1 判定收敛时清点
+  "全库共 2 处裸扫"，实际 `extract inode time ddl` 与
+  `extract free page ext ddl` 内还有两处 `01 12` 弱校验循环 —— 小端
+  int4 值 0x??1201（如 4609）叠加后续字节可同时满足旧校验的
+  relid/valueid>16384、extsize>0、rawsize>0，注册假 TOAST 指针导致后续
+  提取找错文件。统一改走共享 `vbdul_va_is_external_ondisk()`，两条命令
+  真/假指针对照样例实测：旧版各误检 1 个，新版零误检，真阳性零丢失。
+
+- `scan filesystem` 活集行标签 `active` → `allocated`（该集合即 inobt
+  权威遍历的已分配 inode，语义修正）。
+
 ## v1.1.1 (2026-10-01)
 
 修复版：XFS 恢复实测（172.16.53.156 全链验证）暴露的一批真缺陷。
