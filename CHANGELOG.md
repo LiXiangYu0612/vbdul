@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.1.3 (2026-10-02)
+
+复核收尾版：二轮"万无一失"复核抓出的三个缺陷 —— 含一个从 v1.1.1 起
+的丢数据缺陷与两个坏元数据崩溃向量。
+
+### 修复
+
+- **★★TOAST 扫描 4 对齐过滤漏真指针（丢数据，v1.1.1 引入）**：v1.1.1
+  起 4 处 TOAST 指针字节扫描加了 `off % 4 == 0` 前置过滤，依据是
+  "varlena 字段必 intalign"——该假设只对**内联 4 字节头** varlena 成立：
+  PG10-17 `heaptuple.c` 与 openGauss `heaptuple.cpp` 的外部指针写入分支
+  均为 `/* no alignment, since it's short by definition */`（按当前
+  data 位置裸 memcpy）。真实库实证（PG17.7 + VastBase 双内核）：
+  `(bool,text)` 布局的外部指针在 data 偏移 **1**、`(int2,text)` 在
+  偏移 **2** —— v1.1.1/v1.1.2 在这两类家常表结构上**静默漏检全部
+  TOAST 指针**（真实堆文件端到端复现）。已删除 4 处对齐过滤，误检由
+  `vbdul_va_is_external_ondisk()` 结构不变量（extsize≤rawsize、
+  rawsize/valueid 语义界）继续承担——合成真假四样例与 v1.1.2 行为
+  对照：真全检出、假全拒、误检不升。**v1.1.1/v1.1.2 用户建议全部升级。**
+
+- **★bmap btree 收集器三界加固（坏元数据崩溃，v1.1.1 引入）**：
+  `xfs_bmap_btree_collect_extents` ①纯内部节点环（坏指针互指）→
+  无限递归栈溢出，加深度 16 截断（合法 bmbt 高度远低于此）；②叶子
+  numrecs 只封 1000 未按 block_size 封顶（4K 块仅容 ~252 条）→ 坏
+  叶子越界读 4KB VLA；③VLA 缓冲按 SB block_size 无界分配。三处加界。
+
 ## v1.1.2 (2026-10-02)
 
 热修版：复核抓出的两个真缺陷 —— v1.1.1 引入的 BTREE fork 崩溃路径，与
