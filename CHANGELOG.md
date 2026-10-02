@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.1.6 (2026-10-03)
+
+全量复核收口版：backup/logminer/多库全面体检 + 旧模式 list 语义对齐，
+全部新旧二进制对照实证后收录。
+
+### 修复
+
+- **旧模式（config database=X）`list table <pattern>` schema 过滤全失效**：
+  远古 v1.0.x 语义把参数当表名子串匹配（`list table public` 只出
+  pg_publication 系）。改与多库模式同一实现（quote-aware
+  `<schema>[.<table>]` + schema OID 过滤）。G100 3.0.8/3.0.9 双机
+  三态实测。
+
+- **★logminer 跨段 WAL 续页越界（伪造记录/崩溃）**：截断段上旧码用
+  越 EOF 零填充"成功组装"伪造记录返回成功（构造夹具实锤），大 rem_len
+  布局下 mmap 越界 SIGBUS。补段尾界。
+
+- **★wal_replayer 三处坏记录向量**：TDE 跳过无 remaining<8 检查
+  （uint32 下溢→检查全失守）；FPW hole 零校验（写爆 8K 栈页/负长巨拷）；
+  image_offset 未对记录长校验（读指到组装缓冲外）。
+
+- **backup list 三命令路径漂移**：读侧 cwd 相对 vs 写侧 dict_root——
+  换目录运行即 "Cannot open"。统一 dict_root。
+
+- **XFS 四处 VLA 块大小界**：SB 损坏可给出任意 block_size 撑爆栈，
+  统一 [512,65536] 合法界。
+
+- **★extract 认领混淆：3 列兼容 DDL 会把真 TOAST chunk 页当业务行导出**：
+  TOAST 表结构恰为 (oid,int4,bytea)，`(int,int,text)` 类 DDL 的 verify
+  对 chunk 页全数通过——旧码实测 chunk 数据混入业务表输出（用户问出
+  的混淆缺口）。all 模式认领现排除 toast 类型页（chunk 收集路径独立，
+  TOAST 重组不受影响）；分类器侧 STRICT 判据链（全行同 chunk_id+seq
+  连续+t_hoff=24+无 OID+id>16384）防业务表反向误判，仅"自切分存储"
+  型应用表（页内同 id 顺序 seq）为已知残余边界。
+
+### 审计声明
+
+本版发布前完成：TOAST/extract 族、XFS 扫描、imp、list、backup、
+logminer、wal_replayer、dict/catalog loader、多库一致性全量复核；
+156/204 双机真数据回归（含十万行 unload md5 对账、三实例 imp 回环、
+真机 XFS 全链）。xlog_recovery 链按用户指令冻结不再深挖（防御修复
+保留）。性能候选一项（parse_all 行级分配）经十万行实测判零收益已
+回退，不做无实证的改动。
+
+## v1.1.5 (2026-10-03)
+
+hotfix：旧模式 `list table` 语义对齐（v1.1.4 后连夜复核发现）。
+
+### 修复
+
+- **旧模式（config database=X）`list table <pattern>` schema 过滤全失效**：
+  远古 v1.0.x 语义把参数当【表名子串】匹配 —— `list table public` 只出
+  pg_publication 系（全库唯一名字含 public 的表）。改走与多库模式同一
+  实现（quote-aware `<schema>[.<table>]` 切分 + schema.dul OID 过滤 +
+  schema 内表名模糊）。双机实测：G100 3.0.8 / 3.0.9 三态全对（列
+  schema 全表 / 精确表 / 不存在 schema 提示）。
+
 ## v1.1.4 (2026-10-02)
 
 坏输入加固版：156 真机全链复核（三轮）抓出的坏元数据/坏页崩溃向量
