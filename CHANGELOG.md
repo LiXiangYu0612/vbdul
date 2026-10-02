@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.1.7 (2026-10-03)
+
+架构统一版：VB/PG DROP/TRUNCATE 恢复链合一 —— 同一管线、同一 .dul、
+同一命令面；删 pg_drop 模块 5577 行冗余代码。
+
+### 重大变更
+
+- **统一恢复链**：VB（openGauss 内核）与 PG（社区内核）DROP/TRUNCATE
+  恢复走同一条 free-page 管线（scan filesystem → extract free page
+  → unload table recover），产出同一份 `xfs_free_ext.dul`。页面/Tuple
+  解析严格按内核分派（`pg_/vb_` 双轨，绝不分叉混淆）。
+
+- **命令面统一**：
+  - `extract free page using vb_ddl|pg_ddl` —— token 与 config
+    db_type 交叉校验，配错响亮拒绝（防跨内核混淆）
+  - `extract inode <n>|all [time ...]` —— 裸语法（`using vb_ddl`
+    后缀兼容一个版本）；不匹配文件保留为 inode_N.dat 不再删除
+  - fragment 命令族（list/show/match/extract fragment）移除，
+    后续作为 vb+pg 统一增强重做（无 DDL 兜底，排最后）
+
+- **pg_drop 模块移除**（-5577 行）：fragment 分组/列类型推断/DDL
+  评分流全链删除。内核分派谓词迁至 `db_ops.h::vbdul_db_is_pg_kernel`
+  （中立位置，xfs/ext4 页检测共用，零逻辑变化）。
+
+### 验证
+
+156 双库实测（vastbase v3 + postgresql 17，XFS cl-home 真实设备，
+子集 md5 真值对账法）：
+
+| 场景 | 恢复率 | md5 |
+|---|---|---|
+| VB DROP | 300/300 = 100% | 逐位一致 |
+| VB TRUNCATE | 300/300 = 100% | 逐位一致 |
+| PG DROP | 300/300 = 100% | 逐位一致 |
+| PG TRUNCATE | 300/300 = 100% | 逐位一致 |
+
+本地回归：B1 单测 ✓、ABCD 双流 2/2 ✓、交叉校验双向 ✓
+
 ## v1.1.6 (2026-10-03)
 
 全量复核收口版：backup/logminer/多库全面体检 + 旧模式 list 语义对齐，
