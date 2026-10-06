@@ -1,5 +1,68 @@
 # Changelog
 
+## v1.1.8 (2026-10-06)
+
+rm -rf 数据目录恢复版：误删 data_dir（XFS/ext4）的整库文件级恢复链，
+外加运营工程四件套（断点续扫/设备直通/free 区间扫/坏 SB 回退）与
+ext4 目录树恢复第一层。
+
+### 新增
+
+- **rm -rf 恢复链（P1）**：
+  - 目录骨架重建：残余条目滑动 carve、SF 目录残余解析、孤儿子树
+    嫁接 + `_lost` 聚簇、跨代尸体 crtime/lsn 过滤
+  - 日志挖掘（R11）：XFS log 的 inode cores / SF 链接 / 目录块碎片
+    → `xfs_loglink.dul`，BFS 嫁接区按表补链
+  - 页雕琢兜底（R13）：inode 死透的文件按空闲页段裸输出
+  - **扫描时页快照（R15）**：identify 命中页边扫边存镜像，提取先
+    快照后活盘 —— 对"扫后块被复用"的窗口免疫
+  - 相位自适应：`rm_dir` 在场时目录骨架先于页扫（易失性排序）
+  - 代际绑定硬门（R12-1）：无本代候选时拒绝旧代嫁接，输出 NOT
+    FOUND + 原因；损失量化（R12-2）把 unlink 风暴 extent 分解为
+    可恢复/已复用
+  - Phase 0 收割 AGI unlinked 链（新鲜 drop 的 inode 不在 finobt）
+  - 灾难引导：data_dir 指挂载点即可起步（unload dict 自举
+    filesystem.dul）
+
+- **运营工程（P2）**：
+  - 会话持久化 + 断点续扫：scan_session.dul 分相位 checkpoint，
+    kill 后从游标接续（mid-phase p3 游标读回）
+  - 设备直通：`config device <path>` 直接吃 dd 镜像/分区/LV
+  - free 区间合流：树扫遍历 bnobt ∪ unlinked 区间（41G 盘 →
+    13.2G 实扫），坏 btree 自动退化全盘段
+  - 坏超级块回退：主 SB 损坏时从 AG 副本自洽恢复几何
+
+- **ext4 目录树恢复（第一层）**：inode 表驱动 BFS + 双路 carve
+  （尸位残名 + gap 隐藏名）+ extract 统一命令接入
+
+- **商业对标补缺**：reflink/COW rmap 兜底（owner→extents 反查）、
+  AGF 损坏时聚合 ABTB 叶块重建 free 表、XFS/ext4 日志挖链接
+
+- **命令面**：`scan filesystem [parallel N]` 全链总命令（页扫 +
+  inode + 目录树四相位）；`scan_stats.dul` 把一次扫描的统计全留现场
+
+### 修复
+
+- **块号约定三连修**：bno 遍历起点按线性绝对块号统一（此前 AG1+
+  双重偏移丢 517/663 条、AG3 全灭）
+- 候选嫁接选根反选（同代内按目录子项数 + crtime 最老定真根）、
+  候选 staging 重复入列挤掉真根
+- 提取器补建父目录：`_unnamed`/`_lost` 合成容器不再 ENOENT；
+  静默 `failed++` 全部补原因（含 strerror(errno)）
+- datadir 提取按文件系统块大小读页（BLCKSZ 是数据库页大小）
+- 断点续扫游标两处死代码（1M 边界判定永不触发 / 活游标无读方）
+- TRUNCATE 恢复缺 table_ddl.dul 时回退字典形状（零 DDL 可跑）
+- 陈旧误报 WARN 清理（多库模式 data_dir 提示等）
+
+### 验证
+
+- 156 真机（XFS cl-home 真实设备）端到端：标准路线 md5_exact
+  ~90% 稳定带（多代污染测试床）
+- 统一测试：dd 镜像直通 / 坏 SB 零损失 / kill-续扫描闭环 /
+  DROP/TRUNCATE 四场景保持 v1.1.7 基线
+- 测试方法论红线入 tests/recovery_lab（受害者名唯一、真值同源、
+  路径级评分）
+
 ## v1.1.7 (2026-10-03)
 
 架构统一版：VB/PG DROP/TRUNCATE 恢复链合一 —— 同一管线、同一 .dul、
