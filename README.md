@@ -9,7 +9,7 @@ vbdul 是一款数据库应急数据恢复工具（类似 Oracle ODU），支持
 
 到 [Releases](https://github.com/LiXiangYu0612/vbdul/releases/latest) 下载对应架构的安装包（静态编译 + UPX 压缩，零运行时依赖，解压即用）：
 
-`vbdul-1.1.7-x86_64.tar.gz` / `vbdul-1.1.7-aarch64.tar.gz`
+`vbdul-1.1.8-x86_64.tar.gz` / `vbdul-1.1.8-aarch64.tar.gz`
 
 ## 授权（License）
 
@@ -28,7 +28,7 @@ vbdul> license show             # 查看授权状态
 |------|------|
 | 数据库无法启动、无备份 | 完全离线解析磁盘数据文件（系统表损坏、实例崩溃均可） |
 | DROP TABLE / TRUNCATE、无备份 | 文件系统空闲页面碎片扫描，定位被释放数据页还原数据 |
-| rm -rf 数据目录 | 目录树扫描 + 按路径提取数据文件 |
+| rm -rf 数据目录 | 目录骨架重建（carve + 日志挖掘 + unlinked 链）+ 扫描时页快照，按路径提取数据文件 |
 | 误 UPDATE / DELETE（有 WAL） | logminer 挖掘 WAL，按事务反向恢复 |
 | 有 ProBackup 备份 | 单表选择性恢复，可指定停止 LSN/XID |
 | 磁盘坏道、数据库坏块 | 损坏页面/I/O 错误自动跳过，抢救剩余完好数据 |
@@ -47,7 +47,7 @@ vbdul> license show             # 查看授权状态
 ## 快速开始
 
 ```bash
-tar xzf vbdul-1.1.7-x86_64.tar.gz && cd vbdul-1.1.7-x86_64
+tar xzf vbdul-1.1.8-x86_64.tar.gz && cd vbdul-1.1.8-x86_64
 ```
 
 编辑 `config.dul` 指定数据目录与数据库：
@@ -123,7 +123,8 @@ vbdul> extract inode 12345 using vb_ddl         # 提取数据文件 + TOAST
 vbdul> unload table public.my_table recover
 
 # rm -rf 数据目录：
-vbdul> scan fs /home/vastbase/data              # 按目录树扫描
+vbdul> scan filesystem                           # 全链管线：日志挖掘+inode+页扫+目录树
+                                                 # （rm_dir 在场时自动骨架先行；可加 parallel N）
 vbdul> extract fs datadir                       # 按路径提取到 restore/
 ```
 
