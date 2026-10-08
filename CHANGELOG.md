@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.1.10 (2026-10-08)
+
+崩溃修复 + 硬编码审计修复版（7 个提交）。**建议所有 v1.1.8/v1.1.9
+用户立即升级**：v1.1.8/v1.1.9 在"误删后立即 scan"（产品主场景）必崩。
+
+### 修复 — 崩溃（scan filesystem）
+
+- **R11b 日志挖链接传值当指针 —— Phase 0 必崩（SIGSEGV）**：
+  `xfs_mine_log_inode_sizes` 两处调用把 `log_entries_inc` 按值传给
+  `uint64_t*` 参数（0 被转成 NULL），函数内 `(*mined)++` 即段错误。
+  自 10-04 引入、同日 split-op 修复激活后潜伏，日志窗口内有目录块
+  镜像就触发 —— rm-rf 后立即 scan 全链路断（156 真机 gdb 实证）
+
+### 修复 — rm-rf 恢复正确性
+
+- **R12-1b rm 后 inode 复用过滤**：恢复出的文件可能是 rm 之后活
+  实例新建的文件（allocator 复用释放 inode，156 实测 112 个"恢复"
+  全是错代新文件）—— 现按 rm 子树 crtime 锚拒绝复用 inode，统计
+  行恒显
+
+### 修复 — 硬编码审计（三切面 58 项中的主线高危）
+
+- **type_map 补系统复合/伪类型**（v3/v6/vb0）：未知类型此前回退
+  varlena = 定长列连锁错位
+- **catalog 字段槽 1024→8192** + 三 parser 顶格截断 WARN：长函数
+  体/视图规则/索引表达式此前静默失真
+- **TOAST 指针收集 256 硬顶×3 处改动态扩容**：满后静默丢大字段
+- **数组元素对齐弃"猜"改实测**（dict typalign/type_map OID 兜底）：
+  timetz[]/macaddr[] 第 2 个元素起错位
+- **logminer DML 拼接 snprintf 下溢越界**改 LM_APPEND 钉死截断
+
+### 验证
+
+- XFS 主路径（156 真机）：DROP / TRUNCATE 行恢复各 **10000/10000 =
+  100% 精确**（同二进制口径；此前的 0% 是测试脚本形状硬编码）
+- 204（v3 活库）unload dict + unload table 回归逐字节一致
+- 全量警告多重集对账 424=424 零新增（R11b 修复另消除 2 条
+  int-conversion 存量警告）
+
 ## v1.1.9 (2026-10-08)
 
 unload/dict 与 scan（XFS/ext4）双主线全面缺陷审计修复版：54 个提交，
