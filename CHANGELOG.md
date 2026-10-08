@@ -1,5 +1,100 @@
 # Changelog
 
+## v1.1.9 (2026-10-08)
+
+unload/dict 与 scan（XFS/ext4）双主线全面缺陷审计修复版：54 个提交，
+覆盖内存安全、静默失效、数据正确性与可移植性。每条修复均经
+"同 flags 编译前后警告多重集对账（零新增）+ 全量构建"，关键项上
+204/156 真机验证。
+
+### 修复 — 字典读写契约（unload dict）
+
+- **.dul 四个尾字段的读写契约从没接上**：函数体、列默认值、包体、
+  触发器体此前静默丢失
+- **中间字段转义成组**：标识符/表达式含 `|`（如 `CHECK (a || b)`、
+  表名 `t|b`）不再整行错位；写侧 19 处 + 读侧 25 处统一走
+  转义/反转义正典，.dul 头部加 `# format: v2 text-escaped` 代次标记
+- proc.dul 无 propackageid 档位只写 8 字段（读侧整体错位）、
+  constraint.dul 差一位（CHECK 约束静默全丢）、index.dul 行缓冲
+  装不下长表达式、dict_loader 三处解析缺陷
+- 分区四连修：V3 目录字段槽 128→1024（LIST 边界长于 ~77 字符变
+  `{}`）、pg_partition 512 硬顶丢分区、LIST 边界引号化两处栈溢出
+
+### 修复 — 数据正确性（unload table）
+
+- **字面 `\N` 数据值与 NULL 标记混淆**：值恰好为 `\N` 的列被原样
+  输出、重载时读成 NULL（丢值）。现 NULL 判定上移、数据值统一
+  转义，字面 `\N` 输出 `\\N`，与 PG COPY text 口径一致；空串/NULL/
+  字面 `\N` 三态可区分，v3+v5 双内核往返 5/5 逐值一致
+- **冻结元组被当"插入回滚"丢弃**：VACUUM 过的表静默少行
+- **空串列静默重复上一列的值**（探针实测 `[abc|abc]`）
+- varlena 长度助手不认 18B 外部 TOAST 指针（被 DROP 的列之后
+  整行错位）
+- 内联压缩 varlena PGLZ 流偏移错 4 字节 + bytea 渲染三处
+- **numeric 精度**：weight<-1 时小数前导零 digit 组未补（
+  `-0.000042` 渲染 `-.42`、小数值虚大 10^4n 倍）+ NumericShort
+  weight 符号-幅值误读（-2 读成 -62）共 5 处实现
+- PG 侧 jsonb `count` / 数组 `dim1` 越界读（探针实测 SIGSEGV）
+- imp 文件名反解：schema 名含 `_` 时丢表/错 schema 灌数据
+- 数据 .txt 写失败（盘满）静默当成功
+- 表级 DDL / 分区键三处定长栈缓冲越界写
+
+### 修复 — 类型系统
+
+- **type_map 按版本独立定型（三档实测）**：v0=AtlasDB（date 8B
+  PG timestamp 布局 + varchar2/nvarchar2）、v3=VastBase（oradate
+  8B）、v5=PG 17 标准（date 4B、无 Oracle 别名）—— 旧注释
+  "v5 date=8B" 是错的，一刀切 hack 已删
+- 未知 db_type 静默回落 vastbase v3 → 显式报错（与自述策略一致）
+
+### 修复 — XFS / 扫描
+
+- **bmap btree 块头 bb_level/bb_numrecs 读反**：BTREE 格式 inode
+  一条 extent 都收不回（156 真机：基线 0 条 → 40/40 与 xfs_db 一致）
+- **8 处 db_version 漏拷**：v3 实例整条页识别失效（真机 0 页 →
+  806/806）
+- AGI unlinked 收割漏拼 AG 分量（AG>0 的 inode 号系统性偏小）
+- 多设备 ctx 别名 double-free/fclose、fds[] 零初始化当有效 fd、
+  位图上界用错量
+- 残留 extent 扫描越过调用方缓冲、EXTENT 目录 inode 二级指针、
+  日志解析 ops_end 不夹缓冲 + 短读下溢死循环、free 扫把"页=2 块"
+  写死（8K+ 块全错）、页缓冲按 block_size 分配、scan_stats 时间戳
+  未初始化
+
+### 修复 — ext4
+
+- 目录树 BFS 每条路径 free 两次（必然 double-free）、队列硬顶 1024
+  静默截断、inode-table 容量砍到 1/128（journal 挖矿静默失效）、
+  残留 extent 字段偏移、固定 char[4096] 装 block_size（大块栈溢出）、
+  `system("mkdir -p")` 路径注入点
+
+### 修复 — 磁盘/文件系统探测
+
+- diskdetect 三处 double-fclose、XFS magic 缺字节序、NVMe 分区号
+  恒 0 + 漏扫、mounts[] 栈缓冲无边界
+
+### 修复 — backup（probackup 字典）
+
+- 诚实化：压缩页假读报成功 → 诚实跳过 + 告警 + 传染失败；页号取
+  hdr.block 而非顺序索引；5 处吞返回值改检查
+  （pg_probackup 完整解压支持待真实环境，本版不含）
+
+### 修复 — 可移植性
+
+- switch 标号后紧跟声明 —— RHEL/CentOS 8（GCC 8.5）编译不过，
+  全仓仅此一处
+
+### 方法与验证
+
+- 两轮"unload + scan 全面缺陷审计"：13 个只读复盘 agent 分切面 +
+  逐条人工复核 + `gcc -fanalyzer` 独立工具线
+- **独立复核抓出 3 处"改半截"**（numeric 兄弟实现 / restorer 压缩
+  页连坐 / backup 写侧转义）均已补修 + 真机验证
+- 每 commit 同 flags 警告多重集对账零新增（556→457 全为消除）；
+  改共享头做受影响 TU 全量对账
+- 204 真机：type_map 三档活探针 + 字节级 hexdump 实证；numeric
+  七行边值 E2E；转义 schema `s|1`/表 `t|b` 全链路
+
 ## v1.1.8 (2026-10-06)
 
 rm -rf 数据目录恢复版：误删 data_dir（XFS/ext4）的整库文件级恢复链，
