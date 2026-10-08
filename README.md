@@ -9,7 +9,7 @@ vbdul 是一款数据库应急数据恢复工具（类似 Oracle ODU），支持
 
 到 [Releases](https://github.com/LiXiangYu0612/vbdul/releases/latest) 下载对应架构的安装包（静态编译 + UPX 压缩，零运行时依赖，解压即用）：
 
-`vbdul-1.1.8-x86_64.tar.gz` / `vbdul-1.1.8-aarch64.tar.gz`
+`vbdul-1.1.9-x86_64.tar.gz` / `vbdul-1.1.9-aarch64.tar.gz`
 
 ## 授权（License）
 
@@ -47,7 +47,7 @@ vbdul> license show             # 查看授权状态
 ## 快速开始
 
 ```bash
-tar xzf vbdul-1.1.8-x86_64.tar.gz && cd vbdul-1.1.8-x86_64
+tar xzf vbdul-1.1.9-x86_64.tar.gz && cd vbdul-1.1.9-x86_64
 ```
 
 编辑 `config.dul` 指定数据目录与数据库：
