@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.1.11 (2026-10-11)
+
+全类型矩阵 + 端到端恢复质量版（20 个提交）：10-10 审计 30 条修复
+收官 + 五引擎全类型 unload 矩阵全绿 + XFS/ext4 扫描侧 15 处边界
+修复。每条均经独立双 agent 复核 + 真机验证。
+
+### 新增 — 类型覆盖（unload table 全类型矩阵）
+
+- **enum / composite（复合类型）**：pg_enum 字典双版布局（PG12+
+  首列 oid 是数据列；VB/openGauss 3 列 oid 在元组头）；复合迷你
+  头双内核字节定版（PG mask2@14 / VB@16 +2B bucket，bitmap@19 /
+  data@20 同位）；composite has_null 位图感知
+- **几何族 / tsvector / range**：point/path/polygon 等 6 类（含
+  polygon boundbox 环绕）、range 3 类真机绿
+- **V0（AtlasDB/PG11）适配**：pg_enum 3 列 + name 长度 64（越界
+  致 label 恒 \N）+ 扩展日期 OID(13389) 数组元素渲染
+
+### 修复 — PG 侧数据正确性（12 项）
+
+- **PG16/PG12/PG13 pg_attribute 列序对齐源码 —— PG16 unload
+  全废修复**：attnum/attlen 等列位错档，unload 出的列定义全错
+- datetime/infinity/BC 日期/interval 精确重写；NaN/Inf float；
+  单列空串；bit/mac/lsn/money；数组元素/多维对齐（packed 元素）；
+  jsonb 嵌套与超长值
+- detoast/解压值按类型分派渲染 —— jsonb/numeric/数组不再裸
+  memcpy
+
+### 修复 — VB 侧数据正确性（9 项）
+
+- **大 numeric 4B 头误判**：头字节 >1000 被当"无头"吃掉
+- jsonb 三重缓冲（1024/256/缺 NUL 终止）；空 bytea；压缩/detoast
+  分派；money/mac/oradate 数组
+
+### 修复 — 扫描/恢复链（XFS B1-B8 + ext4 C2/C7 等 15 处）
+
+- 越界读/写、uint32 回绕活锁（日志挖矿）、静默截断、几何错位
+- toast 页分类"整页同 chunk_id"误杀小值外部存储（EXTERNAL 大
+  字段恢复全占位）
+- 可见性 FROZEN/LOCK_ONLY 分类（VB/PG 双实现分派）
+- obj 同 oid 双 toast 关系合并改后行者赢；schema 过滤 dropped 列
+
+### 验证
+
+- **五引擎全类型矩阵**：156 VB v3(3.0.9) 10/10、204 VB v3(3.0.8)
+  10/10、156 PG17.9 9/9、204 V0(AtlasDB) 8/10（余 2 项非 bug）、
+  本地 PG16 9/9 —— t_extra 含 enum/composite/range/几何/tsvector
+  十列 cast 对账 0 差
+- **端到端 DROP→scan free 雕刻：PG17 3000/3000 = 100%、
+  VB v3 3000/3000 = 100%**（真实 SQL 建表+DROP+CHECKPOINT）
+- XFS 全管线 7.45GB 零 WARN；156 双引擎回归零扰动；fanalyzer
+  零发现；独立复核双 agent 11 项全修全验
+
 ## v1.1.10 (2026-10-08)
 
 崩溃修复 + 硬编码审计修复版（7 个提交）。**建议所有 v1.1.8/v1.1.9
