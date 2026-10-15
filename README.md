@@ -1,176 +1,210 @@
-# vbdul — VastBase/openGauss/PostgreSQL 数据应急恢复工具
+# vbdul - VastBase/openGauss 数据应急恢复工具
 
-vbdul 是一款数据库应急数据恢复工具（类似 Oracle ODU），支持 VastBase、openGauss 内核版本与 PostgreSQL 11~17。在数据库无法启动、误删表/数据、误 UPDATE/DELETE、无备份的极端场景下，直接从磁盘数据文件、文件系统空闲空间或 WAL 中抢救恢复数据。
-
-> **源代码不公开。** 本仓库仅提供可执行文件发布与使用文档。
-> 授权与技术咨询：lxy4@vastdata.com.cn
-
-## 下载
-
-到 [Releases](https://github.com/LiXiangYu0612/vbdul/releases/latest) 下载对应架构的安装包（静态编译 + UPX 压缩，零运行时依赖，解压即用）：
-
-`vbdul-1.1.11-x86_64.tar.gz` / `vbdul-1.1.11-aarch64.tar.gz`
-
-## 授权（License）
-
-正式版按主机指纹授权。首次使用：
-
-```
-vbdul> license request          # 生成 license_request.txt（含主机指纹）
-vbdul> license show             # 查看授权状态
-```
-
-将 `license_request.txt` 发送到 lxy4@vastdata.com.cn 获取 `license.dul`，放到 vbdul 同目录即可。
+vbdul 是一款 VastBase/openGauss 数据库应急数据恢复工具，类似 Oracle ODU。在数据库无法启动、误删表/数据、无备份的极端场景下，直接从磁盘数据文件中抢救恢复数据。
 
 ## 适用场景
 
-| 场景 | 手段 |
-|------|------|
-| 数据库无法启动、无备份 | 完全离线解析磁盘数据文件（系统表损坏、实例崩溃均可） |
-| DROP TABLE / TRUNCATE、无备份 | 文件系统空闲页面碎片扫描，定位被释放数据页还原数据 |
-| rm -rf 数据目录 | 目录骨架重建（carve + 日志挖掘 + unlinked 链）+ 扫描时页快照，按路径提取数据文件 |
-| 误 UPDATE / DELETE（有 WAL） | logminer 挖掘 WAL，按事务反向恢复 |
-| 有 ProBackup 备份 | 单表选择性恢复，可指定停止 LSN/XID |
-| 磁盘坏道、数据库坏块 | 损坏页面/I/O 错误自动跳过，抢救剩余完好数据 |
+- **数据库无法启动、无备份**：系统表损坏、实例崩溃时完全离线操作，直接解析磁盘数据文件
+- **DROP TABLE / TRUNCATE、无备份**：文件系统级空闲页面扫描，定位被释放的数据页面还原数据；有 ProBackup 备份时按时间点回退
+- **磁盘坏道、数据库坏块、无备份**：损坏页面自动跳过，尽可能从剩余完好页面抢救数据
 
-## 支持矩阵
+# 使用手册
 
-| 维度 | 支持 |
-|------|------|
-| 数据库 | VastBase v0/v1/v2/v3/v5/v6（PG11/PG14/PG16/openGauss 6.0/PG17/G100 2.2.5 内核）、PostgreSQL 11~17 |
-| 文件系统 | ext4（inode/extent/空闲块）、XFS（AGFL/BNO B+tree/RMAP）、LVM（VG/PV/LV 聚合） |
-| 平台 | Linux x86_64、Linux aarch64 |
-| 存储引擎 | Heap（行存）；ustore/cstore 暂不支持 |
+适用版本：v1.1.12 及以上
 
-支持的数据类型：int2/4/8、float4/8、numeric、number、char/varchar/text/nvarchar2、bytea/blob、date/time/timestamp(tz)、bool、jsonb、uuid、money、oid、xml、数组（int[]/text[]/bool[]/numeric[]）、TOAST 大字段（PGLZ 压缩/外部存储，1MB+ 实测）。
-
-## 快速开始
+## 1. 部署
 
 ```bash
-tar xzf vbdul-1.1.11-x86_64.tar.gz && cd vbdul-1.1.11-x86_64
+tar xzf vbdul-1.1.12-x86_64.tar.gz        # aarch64 服务器用 vbdul-1.1.12-aarch64.tar.gz
+cd vbdul-1.1.12-x86_64
+vi config.dul                             # 按第 2 节配置
+./vbdul
 ```
 
-编辑 `config.dul` 指定数据目录与数据库：
+正式版首次运行处于受限模式（只能 license / config / help）。执行 `license request`
+生成 license_request.txt，发给供应商换取 license.dul，放到 vbdul 同目录后重新运行
+即可。Beta 版无需 license。
+
+## 2. 配置 config.dul（vi 编辑）
+
+用 vi 打开解压目录下的 config.dul，按"配置项 值"逐行填写。关键配置：
+
+| 配置项 | 必填 | 说明 |
+|--------|------|------|
+| db_type | 是 | `vastbase` 或 `postgresql`，按实例内核填；填错直接报错退出 |
+| db_version | 是 | 内核版本代号，见下表 |
+| data_dir | 是 | 数据目录（VastBase 如 `/home/vastbase/data/vastbase`；PG 如 `/var/lib/pgsql/17/data`） |
+| database | 否 | 目标库名。**配置与不配置决定命令怎么写**，见 2.1 |
+| output_dir | 否 | 导出目录，默认 `data` |
+| wal_dir | 用 logminer 必填 | WAL 目录（VastBase 是 `pg_xlog`，PG 是 `pg_wal`），也可指向 WAL 归档目录 |
+| backup_dir | 用备份恢复必填 | ProBackup 备份目录 |
+| backup_wal_dir | 用备份恢复必填 | 备份对应的 WAL 归档目录 |
+| delimiter | 否 | 导出字段分隔符，默认 `\|` |
+| charset | 否 | 字符集，默认 `UTF8` |
+| ora_number | 否 | VastBase Oracle 兼容 NUMBER 的显示方式，默认 `on` |
+| db_all_exclude | 否 | 建字典时默认跳过的库，默认 `template0,template1,template2` |
+| block_size / byte_order | 否 | 默认 `8192` / `little`，一般不改 |
+
+db_version 取值：
+
+| db_type | db_version | 对应版本 |
+|---------|------------|----------|
+| vastbase | v0 | E100 V3（AtlasDB 3.0.3.8，PG11 内核） |
+| vastbase | v1 | E100 V4（PG14 内核） |
+| vastbase | v2 | E100 V5（PG16 内核） |
+| vastbase | v3 | G100 2215/308/309（openGauss 内核） |
+| vastbase | v5 | G100 V5（PG17 内核） |
+| vastbase | v6 | G100 2.2.5（openGauss 内核） |
+| postgresql | pg10 ~ pg17 | 对应 PostgreSQL 10 ~ 17 |
+
+### 2.1 database 配置与不配置的区别
+
+**配置了 database（例如 `database dultest`）——只操作这一个库，命令直接写对象：**
 
 ```
-db_type     vastbase        # 或 postgresql
-db_version  v3              # vastbase: v0/v1/v2/v3/v5/v6
-data_dir    /home/vastbase/data/vastbase
-database    dultest         # 留空 = 多库模式（v1.1.0，见下节）
-wal_dir     /home/vastbase/data/vastbase/pg_xlog   # logminer 需要
-backup_dir  /backup                                  # ProBackup 恢复需要
+vbdul> unload dict                        # 只给 dultest 建字典
+vbdul> desc public.orders                 # 查表结构
+vbdul> unload table public.orders         # 导出表
+vbdul> unload schema app                  # 导出整个 schema
+vbdul> imp                                # 生成导入脚本
 ```
 
-```
-vbdul> unload dict                    # 构建字典（离线解析系统表）
-vbdul> list table '%orders%'          # 模糊找表
-vbdul> desc public.orders             # 查看表结构
-vbdul> unload table public.orders     # 导出数据（COPY 格式，可直接 psql 导入）
-```
+配置了 database 后命令里不要再写 db 子句。
 
-## 多库支持（v1.1.0）
-
-`database` 留空即进入多库模式：`unload dict` 一次构建全部库的字典，命令用 `db <name>` 子句选库；导出文件带库名前缀（`mydb_public_orders.txt`）互不覆盖。
+**没配置 database——操作整个实例，命令用 db 子句指明库：**
 
 ```
-vbdul> unload dict                          # 一次构建全部库的字典
-vbdul> list db                              # 列出实例内所有数据库
-vbdul> list schema db mydb                  # 列出库内 schema
-vbdul> desc public.orders db mydb           # 查看表结构
-vbdul> unload table public.orders db mydb   # 导出单表
-vbdul> unload db mydb                       # 批量导出整库（expdp 风格输出）
-vbdul> unload db a,b,c [meta|data]          # 显式列表；meta 只导 DDL，data 只导数据
-vbdul> unload db all                        # 全部库（db_all_exclude 可配排除名单）
-vbdul> unload db all except olddb,tmpdb     # all 之上再排除（与 db_all_exclude 并集）
-vbdul> imp table public.orders db mydb      # 生成导入脚本
+vbdul> unload dict                        # 给实例内所有库建字典（template0/1/2 除外）
+vbdul> list db                            # 列出实例内所有库
+vbdul> unload table public.orders db dultest
+vbdul> unload db dultest                  # 整库导出；unload db all 导出全部库
+vbdul> imp table public.orders db dultest
 ```
 
-`db <name>` 同样适用于 `unload schema` / `verify table` / `dump` / `imp` / `restore` / `recover table` / `logminer`。`database` 有值则保持 v1.0.1 单库行为，命令不带 `db` 子句。
+vastbase / postgres 等实例自带库默认也会建字典，`unload table xxx db vastbase`
+可直接使用。两种方式导出的文件名都带库名前缀，例如
+`dultest_public_orders.txt`、`dultest_public_orders.sql`。
 
-## DROP TABLE / TRUNCATE 恢复（无备份）
-
-被释放的数据页面在文件系统层面仍保留原始内容（直到被覆写）。**恢复动作越早越好，期间避免大量写入。**
-
-```
-vbdul> unload dict                              # 生成字典 + filesystem.dul
-vbdul> scan filesystem free parallel 4          # 并行扫描空闲空间中的数据页面
-vbdul> list free page ext col 5 tlen 100        # 按字段数/tuple长度过滤定位目标表
-vbdul> extract free page using vb_ddl           # DDL 匹配提取 + 自动关联 TOAST
-vbdul> unload table public.orders recover       # 导出为可导入 SQL
-```
-
-## PostgreSQL DROP/TRUNCATE 恢复
-
-`db_type postgresql` 时，`scan filesystem free` 会额外生成 PG 碎片记录（`dict/pg_drop_fragments.dul`），配合 DDL 匹配恢复：
+## 3. 基本流程（表还在，导出数据）
 
 ```
-vbdul> scan filesystem free parallel 4       # 扫描（生成 pg_drop_fragments.dul）
-vbdul> list fragment                         # 列出碎片（F001/F002...）
-vbdul> show fragment F002                    # 查看碎片及页面详情
-vbdul> match ddl /path/to/ddl.sql            # 用 DDL 匹配碎片 → table_ddl.dul
-vbdul> extract pg fragment F002 using ddl /path/to/ddl.sql [--toast F005]   # 提取碎片（含 TOAST）
+vbdul> unload dict                        # 1. 构建字典，首次必做
+vbdul> desc public.orders                 # 2. 查看表结构
+vbdul> unload table public.orders         # 3. 导出 → data/dultest_public_orders.txt/.sql
+vbdul> imp                                # 4. 生成导入脚本 → data/import_all.sh + import_all.sql
 ```
 
-也可以按字典或 DDL 提取整表：`extract pg table <schema.table> using dict` / `using ddl [path]`。
+导入（`imp` 生成的脚本）：
 
-## 数据库无法启动 / 文件被删
-
-```
-vbdul> unload dict
-vbdul> scan filesystem inode                    # inode 扫描定位已删除文件
-vbdul> list filesystem inode
-vbdul> extract inode 12345 using vb_ddl         # 提取数据文件 + TOAST
-vbdul> unload table public.my_table recover
-
-# rm -rf 数据目录：
-vbdul> scan filesystem                           # 全链管线：日志挖掘+inode+页扫+目录树
-                                                 # （rm_dir 在场时自动骨架先行；可加 parallel N）
-vbdul> extract fs datadir                       # 按路径提取到 restore/
+```bash
+cd data
+./import_all.sh <库名> <主机> <端口> <用户>
+# 或者
+psql -h <主机> -p <端口> -U <用户> -d <库名> -f import_all.sql
 ```
 
-## WAL 误操作回滚（logminer）
+`imp` 只处理 unload 导出的表；recover / logminer 的输出不会进导入脚本（见第 4、6 节）。
 
-前置：config.dul 配置 `wal_dir`，并已执行 `unload dict`。参数为 WAL 段文件名（24 位十六进制，起止段须同 timeline）：
+## 4. DROP TABLE / TRUNCATE 恢复（无备份）
 
-```
-vbdul> logminer 00000001000000000000000A 00000001000000000000000C \
-       table public.orders start_time '2026-06-20 10:00:00'
-vbdul> logminer list table public.orders delete         # 查看被误删的行
-vbdul> logminer xid 12345 recover delete                # 按事务恢复：DELETE→数据文件, UPDATE→反向SQL
-```
+DROP / TRUNCATE 之后，数据库释放的数据页在文件系统层面仍保留原内容，直到被新数据
+覆写。vbdul 扫描这些空闲页面，从中还原表数据。
 
-过滤选项：`table <s.t>`（指定表）、`xid <N>`（指定事务，仅 PG）、`start_lsn/stop_lsn <X/XX>`（LSN 区间）、`start_time/stop_time <时间>`（提交时间）、`nobuf`（跳过事务缓冲直接输出 DML）。
+恢复前提：
 
-## ProBackup 备份恢复
+- 误操作后**没有大量写入**，页面尚未被覆写；越早恢复成功率越高（建议立即停止或
+  减少该实例的写入）
+- 大致记得表名和字段数（用于过滤定位）
 
-前置：config.dul 配置 `backup_dir`。单表恢复四步（顺序不可颠倒）：
+步骤（以 public.orders，5 个字段为例）：
 
 ```
-vbdul> list backup                              # 列出备份集（list archivelog 列 WAL 归档区间）
-vbdul> unload dict backup BACKUP_ID             # 1. 从备份构建字典
-vbdul> restore table public.orders              # 2. 还原表数据文件到 restore/
-vbdul> recover table public.orders until xid 12345   # 3. WAL 前滚（until lsn X/Y | until time '...' | until xid N）
-vbdul> unload table public.orders from backup   # 4. 从 restore/ 导出数据
+vbdul> unload dict                        # 1. 建字典（同时生成 filesystem.dul 设备清单）
+vbdul> scan filesystem free parallel 4    # 2. 扫描空闲页（parallel N 并行加速）
+vbdul> list free page ext col 5           # 3. 可选：按字段数过滤定位（可再加 tlen <行长>）
+vbdul> extract free page using vb_ddl     # 4. 提取并按 DDL 认领 → extract_file/
+                                          #    PostgreSQL 实例用 pg_ddl
+vbdul> desc public.orders recover         # 5. 核对认领出的表结构
+vbdul> unload table public.orders recover # 6. 导出 → data/dultest_recover_public_orders.txt
 ```
 
-## 数据校验与导入
+没配置 database 时，对象级命令加 db 子句，如
+`unload table public.orders db dultest recover`。第 4 步也可以只提取指定碎片：
+`extract free page ext 1,2,3 using vb_ddl`。
+
+导出的 .txt 是 COPY 文本格式，直接导入（imp 不会导入 recover 产物）：
+
+```bash
+cd data
+psql -d <库名> -c "\copy recover_public_orders FROM 'dultest_recover_public_orders.txt' WITH (FORMAT text, DELIMITER '|')"
+```
+
+导入前先建好表结构（可用导出的同名 .sql）。
+
+## 5. TRUNCATE 恢复（有 ProBackup 备份）
+
+有备份时用 WAL 回放把表恢复到误操作之前的状态，结果最可靠。这组命令目前要求
+config.dul **配置了 database**，并配置备份目录：
 
 ```
-vbdul> verify table public.orders     # 离线校验表数据一致性
-vbdul> imp all                        # 为所有已导出表生成 psql 导入脚本
-vbdul> imp schema dultest             # 按 schema 生成
-vbdul> imp table public.orders        # 按表生成
+database        dultest
+backup_dir      /home/vastbase/backup
+backup_wal_dir  /home/vastbase/backup/wal
+restore_dir     restore
 ```
 
-完整命令说明见包内 `help`。
+步骤（顺序不可颠倒）：
 
-## 安全性
+```
+vbdul> list backup                                       # 1. 列出可用备份集
+vbdul> unload dict backup                                # 2. 从备份构建字典
+vbdul> restore table public.orders                       # 3. 还原表数据文件到 restore/
+vbdul> recover table public.orders until time '2026-10-15 10:00:00'
+                                                          # 4. WAL 回放到指定时间点；
+                                                          #    也可 until xid <事务号> 或 until lsn <X/Y>
+vbdul> unload table public.orders from backup            # 5. 导出恢复结果
+```
 
-- **严格只读**：所有源数据（设备/数据文件/备份/WAL）仅以只读方式访问，绝不修改原始数据
-- 输出仅写入独立目录（`data/`、`dict/`、`extract_file/`、`restore/`）
-- 授权基于 Ed25519 签名 + 主机指纹，license 不可伪造、不可跨机使用
+## 6. Logminer（WAL DML 挖掘）
 
-## 已知限制
+从 WAL 挖掘 INSERT / DELETE / UPDATE，定位误操作事务，恢复被误删或误改的行。
+前置：config.dul 配置 `wal_dir`，并已执行 `unload dict`。
 
-- 仅支持 Heap（行存）引擎，ustore（undo 引擎）与 cstore（列存）暂不支持
-- DROP/TRUNCATE 恢复依赖空闲页面未被覆写，恢复窗口内大量写入会降低成功率
+```
+wal_dir    /home/vastbase/data/vastbase/pg_xlog    # PostgreSQL 为 .../pg_wal；也可指向归档目录
+```
+
+挖掘（起止是 WAL 段名，24 位十六进制，可用 `ls` WAL 目录查看）：
+
+```
+vbdul> logminer 000000010000000000000010 000000010000000000000018
+vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders start_time '2026-10-15 09:00:00'
+```
+
+可选过滤：`table <schema.table>`、`xid <N>`（仅 PG）、`start_lsn` / `stop_lsn`、
+`start_time` / `stop_time`、`nobuf`（不缓冲直接输出 DML）。
+
+定位与恢复：
+
+```
+vbdul> logminer list table public.orders delete    # 按事务列出该表的 DELETE
+vbdul> logminer xid 4832 recover delete            # 恢复该事务删掉的行 → 数据行 .txt
+vbdul> logminer xid 4832 recover update            # 反向 UPDATE 语句 → .sql
+```
+
+logminer 输出在 data/ 下（带库名前缀），imp 不会导入这些文件，人工核对后执行。
+
+## 注意事项
+
+- vbdul 以只读方式访问设备和数据文件，不会修改原始数据；输出只写入自身目录
+  （`data/`、`dict/`、`extract_file/`、`restore/`）
+- 操作前建议先备份原始数据文件
+- 仅支持 Heap（行存）引擎；ustore（undo 引擎）、cstore（列存引擎）暂不支持
+- 更多命令在 vbdul 内执行 `help` 查看
+
+## 支持平台
+
+| 平台 | 状态 |
+|------|------|
+| Linux x86_64 | 已支持 |
+| Linux aarch64 | 已支持 |

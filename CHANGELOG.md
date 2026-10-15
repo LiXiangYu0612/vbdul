@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.1.12 (2026-10-15)
+
+recover 产物命名统一 + imp 安全版（4 个提交）。其中 db_all_exclude
+收窄与 XFS 扫描降噪两条已随 10-15 同版本重打包先行进入 v1.1.11 资产
+（md5 de50b372/e6be8b52 批次），此处正式记入版本历史。
+
+### 修复 — imp 只认 unload 产物
+
+- **help 语法回真**：`recover table` 实际语法是 `until lsn/time/xid`，help 误写成
+  `from backup <id> … stop_at` 不存在的组合；`restore table` 补可选 `from backup <id>`
+- **recover / logminer 族产物名统一带 `<db>_` 前缀**：单库（legacy）
+  模式 recover 出来的文件此前不带库名前缀，现与 unload 同口径
+  （recover_ / pg_logminer_ / logminer_<XID>_ 三族一并统一）
+- **imp 显式跳过 recover / logminer 族脚本**：recover 的 .sql 自带
+  `-- Table:` 标记且 .sql/.txt 成对落在 data/，此前会被 imp 当 unload
+  表误导入；xid recover 的 UPDATE .sql 会按第一个下划线解析出
+  schema=logminer 垃圾条目。红绿验证：修复前混入上述两类条目，
+  修复后仅导入正常 unload 表；名字以 recover 开头的真实表不受影响
+
+### 改进 — 字典与扫描
+
+- **db_all_exclude 默认名单收窄**：template0/1/2/postgres/vastbase/
+  atlasdb 六库 → 仅三个模板库；vastbase 系统库开箱可抽
+  （unload table xxx db vastbase 无需先改名单），被排除库不再打印
+  空头 skipped 行（204 真机验证：7 库字典正常，unload table
+  pg_catalog.pg_am db vastbase 导出 16 行与 psql 对账一致）
+- **XFS scan filesystem 输出降噪**：61 处内部进度行压至 debug 级
+  （156 实测刷屏）；删 rm -rf 扫描横幅两行
+- **finobt 判定改读超级块特性位**（XFS_SB_FEAT_RO_COMPAT_FINOBT）：
+  v4 / mkfs finobt=0 的盘安静走 freelist，不再每 AG 一条误报 INFO；
+  删除零调用死代码 xfs_read_agfl()（v4 AGFL 无头无 magic 地雷）
+- **BETA 试用期 30→90 天**：锚定编译日、防时钟回拨，只影响 Beta
+  构建，正式版无感
+
 ## v1.1.11 (2026-10-11)
 
 全类型矩阵 + 端到端恢复质量版（20 个提交）：10-10 审计 30 条修复
@@ -90,6 +124,8 @@
 - 204（v3 活库）unload dict + unload table 回归逐字节一致
 - 全量警告多重集对账 424=424 零新增（R11b 修复另消除 2 条
   int-conversion 存量警告）
+
+## v1.1.9 (2026-10-08)
 
 ## v1.1.9 (2026-10-08)
 
