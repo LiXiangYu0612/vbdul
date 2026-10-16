@@ -34,7 +34,7 @@ vi config.dul                             # 按第 2 节配置
 | db_type | 是 | `vastbase` 或 `postgresql`，按实例内核填；填错直接报错退出 |
 | db_version | 是 | 内核版本代号，见下表 |
 | data_dir | 是 | 数据目录（VastBase 如 `/home/vastbase/data/vastbase`；PG 如 `/var/lib/pgsql/17/data`） |
-| database | 否 | 目标库名。**配置与不配置决定命令怎么写**，见 2.1 |
+| database | 否 | 目标库名。默认不配置（操作整个实例）；配置后只操作该库且命令省 db 子句，见 2.1 |
 | output_dir | 否 | 导出目录，默认 `data` |
 | wal_dir | 用 logminer 必填 | WAL 目录（VastBase 是 `pg_xlog`，PG 是 `pg_wal`），也可指向 WAL 归档目录 |
 | backup_dir | 用备份恢复必填 | ProBackup 备份目录 |
@@ -57,44 +57,60 @@ db_version 取值：
 | vastbase | v6 | G100 2.2.5（openGauss 内核） |
 | postgresql | pg10 ~ pg17 | 对应 PostgreSQL 10 ~ 17 |
 
-### 2.1 database 配置与不配置的区别
+### 2.1 默认（不配置 database）与配置了的区别
 
-**配置了 database（例如 `database dultest`）——只操作这一个库，命令直接写对象：**
-
-```
-vbdul> unload dict                        # 只给 dultest 建字典
-vbdul> desc public.orders                 # 查表结构
-vbdul> unload table public.orders         # 导出表
-vbdul> unload schema app                  # 导出整个 schema
-vbdul> imp                                # 生成导入脚本
-```
-
-配置了 database 后命令里不要再写 db 子句。
-
-**没配置 database——操作整个实例，命令用 db 子句指明库：**
+**默认不配置 database——操作整个实例，对象级命令用 db 子句指明库：**
 
 ```
 vbdul> unload dict                        # 给实例内所有库建字典（template0/1/2 除外）
 vbdul> list db                            # 列出实例内所有库
+vbdul> desc public.orders db dultest      # 查表结构
 vbdul> unload table public.orders db dultest
 vbdul> unload db dultest                  # 整库导出；unload db all 导出全部库
 vbdul> imp table public.orders db dultest
 ```
 
 vastbase / postgres 等实例自带库默认也会建字典，`unload table xxx db vastbase`
-可直接使用。两种方式导出的文件名都带库名前缀，例如
-`dultest_public_orders.txt`、`dultest_public_orders.sql`。
+可直接使用。导出文件名带库名前缀，例如 `dultest_public_orders.txt`、
+`dultest_public_orders.sql`。db 子句位置不拘（`unload table public.orders
+db dultest recover` 与 `unload table public.orders recover db dultest` 等价），
+本手册统一写在命令末尾。
+
+**配置了 database（例如 `database dultest`）——只操作这一个库，命令里不用再写
+db 子句：**
+
+```
+vbdul> unload dict                        # 只给 dultest 建字典
+vbdul> unload table public.orders         # 等价于 ... db dultest
+vbdul> imp                                # 只见 dultest 的已导出表
+```
 
 ## 3. 基本流程（表还在，导出数据）
 
+以 dultest 库 public.orders 为例（配置了 database 时去掉 db 子句）：
+
 ```
 vbdul> unload dict                        # 1. 构建字典，首次必做
-vbdul> desc public.orders                 # 2. 查看表结构
-vbdul> unload table public.orders         # 3. 导出 → data/dultest_public_orders.txt/.sql
-vbdul> imp                                # 4. 生成导入脚本 → data/import_all.sh + import_all.sql
+vbdul> desc public.orders db dultest      # 2. 查看表结构
+vbdul> unload table public.orders db dultest   # 3. 导出 → data/dultest_public_orders.txt/.sql
+vbdul> imp table public.orders db dultest # 4. 生成该表的导入脚本
 ```
 
-导入（`imp` 生成的脚本）：
+### 3.1 imp：生成导入脚本
+
+imp 为 **unload 导出的表**生成 psql 导入脚本（.sh + .sql 成对落在 data/），
+按范围三种写法：
+
+| 命令 | 范围 | 产物（data/ 下） |
+|------|------|------------------|
+| `imp` | 全部已导出的表 | `import_all.sh` + `import_all.sql` |
+| `imp schema app` | 该 schema 的已导出表 | `import_app.sh` + `import_app.sql` |
+| `imp table public.orders` | 单张表 | `import_public_orders.sh` + `import_public_orders.sql` |
+
+多库形态下 imp 同样带 db 子句，如 `imp table public.orders db dultest`。
+没有导出记录的表不会出现在任何 imp 脚本里。
+
+导入（任选其一）：
 
 ```bash
 cd data
@@ -125,13 +141,11 @@ vbdul> scan filesystem parallel 4         # 2. 全管线扫描（页扫+inode+�
 vbdul> list free page ext col 5           # 3. 可选：按字段数过滤定位（可再加 tlen <行长>）
 vbdul> extract free page using vb_ddl     # 4. 提取并按 DDL 认领 → extract_file/
                                           #    PostgreSQL 实例用 pg_ddl
-vbdul> desc public.orders recover         # 5. 核对认领出的表结构
-vbdul> unload table public.orders recover # 6. 导出 → data/dultest_recover_public_orders.txt
+vbdul> desc public.orders recover db dultest   # 5. 核对认领出的表结构
+vbdul> unload table public.orders recover db dultest   # 6. 导出 → data/dultest_recover_public_orders.txt
 ```
 
-没配置 database 时，对象级命令加 db 子句，如
-`unload table public.orders db dultest recover`。第 4 步也可以只提取指定碎片：
-`extract free page ext 1,2,3 using vb_ddl`。
+第 4 步也可以只提取指定碎片：`extract free page ext 1,2,3 using vb_ddl`。
 
 导出的 .txt 是 COPY 文本格式，直接导入（imp 不会导入 recover 产物）：
 
@@ -175,23 +189,19 @@ vbdul> unload table public.orders from backup            # 5. 导出恢复结果
 wal_dir    /home/vastbase/data/vastbase/pg_xlog    # PostgreSQL 为 .../pg_wal；也可指向归档目录
 ```
 
-挖掘（起止参数可以是 **WAL 段名**或 **LSN**，二者自动识别）：
+挖掘（起止参数可以是 **WAL 段名**或 **LSN**，二者自动识别；默认形态须带
+`db <库名>`，不带会直接报错，不会静默挖错库）：
 
 ```
-vbdul> logminer 000000010000000000000010 000000010000000000000018   # 段名（24 位十六进制，ls wal_dir 可见）
-vbdul> logminer 000000010000000000000010 000000010000000000000010   # 只挖一个段：起止传同一个段名
-vbdul> logminer 0/4EDD1E8 0/4EDDF90                                # LSN：自动换算所在段，按精确 LSN 区间过滤
-vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders start_time '2026-10-15 09:00:00'
+vbdul> logminer 000000010000000000000010 000000010000000000000018 db dultest   # 段名（24 位十六进制，ls wal_dir 可见）
+vbdul> logminer 000000010000000000000010 000000010000000000000010 db dultest   # 只挖一个段：起止传同一个段名
+vbdul> logminer 0/4EDD1E8 0/4EDDF90 db dultest                  # LSN：自动换算所在段，按精确 LSN 区间过滤
+vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders start_time '2026-10-15 09:00:00' db dultest
 ```
 
 可选过滤：`table <schema.table>`、`xid <N>`（仅 PG）、`start_lsn` / `stop_lsn`、
 `start_time` / `stop_time`、`nobuf`（不缓冲直接输出 DML）。
-
-没配置 database 时，logminer 同样要指明库（不带会直接报错，不会静默挖错库）：
-
-```
-vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders db dultest
-```
+配置了 database 时以上命令可省略 db 子句。
 
 关于 UPDATE / DELETE：VastBase 引擎的 WAL 不记录旧行镜像，因此 UPDATE 的
 REDO 带新值、DELETE 的 REDO 只到表名，两者 UNDO 列标注"不可恢复"；
@@ -201,9 +211,9 @@ INSERT 的 REDO / UNDO 完整。
 定位与恢复：
 
 ```
-vbdul> logminer list table public.orders delete    # 按事务列出该表的 DELETE
-vbdul> logminer xid 4832 recover delete            # 恢复该事务删掉的行 → 数据行 .txt
-vbdul> logminer xid 4832 recover update            # 反向 UPDATE 语句 → .sql
+vbdul> logminer list table public.orders delete db dultest   # 按事务列出该表的 DELETE
+vbdul> logminer xid 4832 recover delete db dultest           # 恢复该事务删掉的行 → 数据行 .txt
+vbdul> logminer xid 4832 recover update db dultest           # 反向 UPDATE 语句 → .sql
 ```
 
 logminer 输出在 data/ 下（带库名前缀），imp 不会导入这些文件，人工核对后执行。
