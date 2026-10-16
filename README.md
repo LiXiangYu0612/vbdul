@@ -72,9 +72,8 @@ vbdul> imp table public.orders db dultest
 
 vastbase / postgres 等实例自带库默认也会建字典，`unload table xxx db vastbase`
 可直接使用。导出文件名带库名前缀，例如 `dultest_public_orders.txt`、
-`dultest_public_orders.sql`。db 子句位置不拘（`unload table public.orders
-db dultest recover` 与 `unload table public.orders recover db dultest` 等价），
-本手册统一写在命令末尾。
+`dultest_public_orders.sql`。db 子句位置不拘（写在前后均能正确解析），
+本手册统一紧跟对象写：`unload table public.orders db dultest recover`。
 
 **配置了 database（例如 `database dultest`）——只操作这一个库，命令里不用再写
 db 子句：**
@@ -136,13 +135,13 @@ DROP / TRUNCATE 之后，数据库释放的数据页在文件系统层面仍保�
 
 ```
 vbdul> unload dict                        # 1. 建字典（同时生成 filesystem.dul 设备清单）
-vbdul> scan filesystem parallel 4         # 2. 全管线扫描（页扫+inode+目录树+WAL 挖矿；
-                                          #    空闲页结果用于本恢复，parallel N 并行加速）
+vbdul> scan filesystem                    # 2. 扫描空闲页（页扫+inode+目录树+WAL 挖矿，
+                                          #    空闲页结果用于本恢复）
 vbdul> list free page ext col 5           # 3. 可选：按字段数过滤定位（可再加 tlen <行长>）
 vbdul> extract free page using vb_ddl     # 4. 提取并按 DDL 认领 → extract_file/
                                           #    PostgreSQL 实例用 pg_ddl
-vbdul> desc public.orders recover db dultest   # 5. 核对认领出的表结构
-vbdul> unload table public.orders recover db dultest   # 6. 导出 → data/dultest_recover_public_orders.txt
+vbdul> desc public.orders db dultest recover   # 5. 核对认领出的表结构
+vbdul> unload table public.orders db dultest recover   # 6. 导出 → data/dultest_recover_public_orders.txt
 ```
 
 第 4 步也可以只提取指定碎片：`extract free page ext 1,2,3 using vb_ddl`。
@@ -196,7 +195,7 @@ wal_dir    /home/vastbase/data/vastbase/pg_xlog    # PostgreSQL 为 .../pg_wal�
 vbdul> logminer 000000010000000000000010 000000010000000000000018 db dultest   # 段名（24 位十六进制，ls wal_dir 可见）
 vbdul> logminer 000000010000000000000010 000000010000000000000010 db dultest   # 只挖一个段：起止传同一个段名
 vbdul> logminer 0/4EDD1E8 0/4EDDF90 db dultest                  # LSN：自动换算所在段，按精确 LSN 区间过滤
-vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders start_time '2026-10-15 09:00:00' db dultest
+vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders db dultest start_time '2026-10-15 09:00:00'
 ```
 
 可选过滤：`table <schema.table>`、`xid <N>`（仅 PG）、`start_lsn` / `stop_lsn`、
@@ -211,7 +210,7 @@ INSERT 的 REDO / UNDO 完整。
 定位与恢复：
 
 ```
-vbdul> logminer list table public.orders delete db dultest   # 按事务列出该表的 DELETE
+vbdul> logminer list table public.orders db dultest delete   # 按事务列出该表的 DELETE
 vbdul> logminer xid 4832 recover delete db dultest           # 恢复该事务删掉的行 → 数据行 .txt
 vbdul> logminer xid 4832 recover update db dultest           # 反向 UPDATE 语句 → .sql
 ```
