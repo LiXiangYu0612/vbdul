@@ -10,13 +10,13 @@ vbdul 是一款 VastBase/openGauss 数据库应急数据恢复工具，类似 Or
 
 # 使用手册
 
-适用版本：v1.1.12 及以上
+适用版本：v1.1.13 及以上
 
 ## 1. 部署
 
 ```bash
-tar xzf vbdul-1.1.12-x86_64.tar.gz        # aarch64 服务器用 vbdul-1.1.12-aarch64.tar.gz
-cd vbdul-1.1.12-x86_64
+tar xzf vbdul-1.1.13-x86_64.tar.gz        # aarch64 服务器用 vbdul-1.1.13-aarch64.tar.gz
+cd vbdul-1.1.13-x86_64
 vi config.dul                             # 按第 2 节配置
 ./vbdul
 ```
@@ -120,7 +120,8 @@ DROP / TRUNCATE 之后，数据库释放的数据页在文件系统层面仍保�
 
 ```
 vbdul> unload dict                        # 1. 建字典（同时生成 filesystem.dul 设备清单）
-vbdul> scan filesystem free parallel 4    # 2. 扫描空闲页（parallel N 并行加速）
+vbdul> scan filesystem parallel 4         # 2. 全管线扫描（页扫+inode+目录树+WAL 挖矿；
+                                          #    空闲页结果用于本恢复，parallel N 并行加速）
 vbdul> list free page ext col 5           # 3. 可选：按字段数过滤定位（可再加 tlen <行长>）
 vbdul> extract free page using vb_ddl     # 4. 提取并按 DDL 认领 → extract_file/
                                           #    PostgreSQL 实例用 pg_ddl
@@ -174,15 +175,28 @@ vbdul> unload table public.orders from backup            # 5. 导出恢复结果
 wal_dir    /home/vastbase/data/vastbase/pg_xlog    # PostgreSQL 为 .../pg_wal；也可指向归档目录
 ```
 
-挖掘（起止是 WAL 段名，24 位十六进制，可用 `ls` WAL 目录查看）：
+挖掘（起止参数可以是 **WAL 段名**或 **LSN**，二者自动识别）：
 
 ```
-vbdul> logminer 000000010000000000000010 000000010000000000000018
+vbdul> logminer 000000010000000000000010 000000010000000000000018   # 段名（24 位十六进制，ls wal_dir 可见）
+vbdul> logminer 000000010000000000000010 000000010000000000000010   # 只挖一个段：起止传同一个段名
+vbdul> logminer 0/4EDD1E8 0/4EDDF90                                # LSN：自动换算所在段，按精确 LSN 区间过滤
 vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders start_time '2026-10-15 09:00:00'
 ```
 
 可选过滤：`table <schema.table>`、`xid <N>`（仅 PG）、`start_lsn` / `stop_lsn`、
 `start_time` / `stop_time`、`nobuf`（不缓冲直接输出 DML）。
+
+没配置 database 时，logminer 同样要指明库（不带会直接报错，不会静默挖错库）：
+
+```
+vbdul> logminer 000000010000000000000010 000000010000000000000018 table public.orders db dultest
+```
+
+关于 UPDATE / DELETE：VastBase 引擎的 WAL 不记录旧行镜像，因此 UPDATE 的
+REDO 带新值、DELETE 的 REDO 只到表名，两者 UNDO 列标注"不可恢复"；
+`logminer xid ... recover` 遇到这类记录会明确报"匹配到但行值不可恢复"。
+INSERT 的 REDO / UNDO 完整。
 
 定位与恢复：
 
