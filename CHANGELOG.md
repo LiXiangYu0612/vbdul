@@ -2,20 +2,19 @@
 
 ## v1.1.13 (2026-10-16)
 
-### 修复 — logminer（204 v3 真机闭环 + pg_xlogdump 对账）
+### 修复 — logminer
 
 - **VB 侧 LSN 会计修复**：记录 LSN 误把 mmap 文件内偏移加到页面绝对 LSN 上
   （页偏移算两遍），段内越往后 LSN 越虚高（实测 15/B9210E8 打成 15/C2410E8）；
   PG 侧原本就对。start_lsn/stop_lsn 过滤随之修正
 - **UPDATE/DELETE 不再整条跳过**（用户令）：旧逻辑"主数据无 OLD/NEW 标志即跳过"
-  会把正常 UPDATE/DELETE 全误丢（新元组在 block data 不在主数据；v0 测试机
-  wal_level=logical 掩盖多年，客户 v3 实测 8687 条全跳）。现 REDO 照常输出
-  （UPDATE 带新值、DELETE 到表名），UNDO 列标注旧行镜像不在 WAL；v3 引擎
-  即使 wal_level=logical 也不写旧行镜像（与 PG 不同，实测证实）
+  会把正常 UPDATE/DELETE 全误丢（新元组在 block data 不在主数据；实测 8687 条记录全部被误跳）。现 REDO 照常输出
+  （UPDATE 带新值、DELETE 到表名），UNDO 列标注旧行镜像不在 WAL；VastBase 引擎
+  即使 wal_level=logical 也不写旧行镜像（与 PG 不同）
 - **起止参数自动识别 LSN**（用户令）：传 X/Y 即自动换算所在 WAL 段（timeline
   从 wal_dir 反查）并设精确 LSN 区间过滤；只挖一个段=起止同名。VB/PG 双侧
 - **段名报错给格式指引**：报错补 24 位示例、ls 提示、start_lsn/stop_lsn 指引
-  （客户被旧报错卡住）；修 TLI 反查 strtoul 溢出（FFFFFFFF）
+  ；修 TLI 反查 strtoul 溢出（FFFFFFFF）
 - **xid recover 诚实计数**：无旧行镜像的匹配行报"matched but not recoverable"，
   不再静默 Matched 0
 
@@ -27,10 +26,9 @@
   `parallel N` 直接被串行守卫打成单线程。现切成 ~1GB 页对齐工作单元，按大小
   降序 LPT 贪心装载（每次分给累计负载最小的线程），单数组摊平
 - **切点重叠 1 块**：单元末块是 8K 滑窗盲区，反奇偶栅格的页恰以末块为页头——
-  独立复核机械模拟证实原切法每切点静默漏 1 页（1TB 连续 extent 最坏 ~8MB
+  边界分析证实原切法每切点可能静默漏 1 页（1TB 连续 extent 最坏 ~8MB
   丢失）；下一单元回退一块起扫补上，不重不漏
-- **对账**：204 XFS loop 病理盘（82% 空间在 2 个 ~4GB extent，真实 VB 页
-  受害者）与 156 真 XFS 根盘（676 碎片 extent）新旧版输出均 sort 后逐位一致
+- **对账**：大 extent 集中与碎片化两类空闲空间形态下，新旧版输出均逐位一致
 - ext4 预存问题一并修复：free 线程 realloc 失败直接置 NULL 导致 merge 解
   引用；补缺失的 pthread.h
 
