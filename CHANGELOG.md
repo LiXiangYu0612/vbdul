@@ -1,5 +1,97 @@
 # Changelog
 
+## v1.1.14 (2026-10-19)
+
+### 修复 — 字典与 DDL 导出
+
+- **PG12~17 pg_proc 列定义补 oid 首列**：PG12 起 catalog 的 oid 从 HASOID
+  系统列改为显式第一列，旧定义从 proname 起读、全字段左移错位——proc.dul
+  函数名乱码、oid 全 0、用户函数整体不可见；PG10/11 定义不变
+- **pg_am / pg_rewrite 补 PG12+ oid 回退**：新布局下 am.dul / rewrite.dul
+  的 oid 恒 0，访问方法（am）与重写规则（rewrite）反查永远落空
+- **索引 DDL 的 USING 取索引自身 relam**：旧实现用堆表 relam 反查，PG12+/
+  VastBase 下 heap 命中时导出非法的 `USING heap`，未命中时 hash/gin/brin/
+  gist 全部塌成默认 btree
+- **触发器 DDL tgtype 位义修正**：ROW/BEFORE/INSTEAD 位全错，普通
+  AFTER INSERT FOR EACH ROW 被导成仅视图合法的 INSTEAD OF ... STATEMENT
+  （建表必炸）、BEFORE 从不输出；触发器函数名改按 tgfoid 反查（不再拿
+  触发器名当函数名）
+- **part.dul 短行守卫前移**：损坏行或超长行被劈出的短尾段在字段解析前先
+  守卫，不再 SIGSEGV，跳行 WARN 继续
+
+### 修复 — 扫描与恢复
+
+- **XFS 断点续扫恢复 free∪unlinked 并集**：resume 路径只按裸 free 列表
+  切片，AGI unlinked 链上的块（rm/DROP 后仍挂链）零覆盖、提示消失；与
+  fallback 路径抽公共 helper 统一
+- **XFS P2 磁盘检查点会话信任门 + 多盘游标隔离**：崩溃残留的扫描游标在
+  重跑时被无条件采纳，新列表前 K 个 extent 永不扫、旧 part 文件混进收尾；
+  多块 XFS 裸盘游标互踩——现仅首个可扫设备采纳游标，信任失配先清检查点
+- **XFS 并集区间减法去重**：free 与 unlinked 两表在部分释放/崩溃窗口可
+  重叠，不去重会同段双扫、恢复出重复元组；实现区间减法（全包含删/中间
+  挖洞拆两段/边咬裁剪），重叠时 INFO 记账
+- **ext4 GDT 基块错位修复**：4K 块设备组描述符基块算式把 boot+SB 区的
+  块 0 当 GDT 读成垃圾，inode table 定位整支失效，journal 解析恒空——
+  rm-rf 恢复的文件长度退化为 nextents×块大小猜测；改 fdb+1 起算，
+  dumpe2fs 权威值逐组合对
+- **obj.dul 同 oid 合并补 relnode 重插**：VACUUM FULL/CLUSTER 重写表后
+  的新 relfilenode 查不到——unload table 有数据而 logminer/WAL 回放按新
+  node 解析的 DML 静默丢失；合并处按新 node 补插哈希
+- **批读短读消费循环越界**：活库卸载中数据文件收缩（或坏道 EIO 恰落
+  批边界）时，消费循环按计划页数迭代到陈旧缓冲，上一批残页被再解析、
+  重复行无声进 .txt；循环界改实际读取页数。单页 fallback 同步改紧凑
+  填充（旧写法批中间坏一页时每批永久丢尾部好页）
+- **seg_subtract 元素计数越界**（独立复核）：区间中间挖洞拆分后有效元素
+  恰为 np+1，多记 1 使消费循环越界读 realloc 堆尾（ASAN 实证）；新增
+  中间挖洞用例
+- **独立复核修正**：批读 fallback 半截回归（EOF 短读修了、单页 fallback
+  反成回归）——好页写前缀槽位、坏页不进缓冲
+- **extract free page 零 DDL 回退补库解析**：config.dul 配置了 database
+  时，`extract free page using vb_ddl|pg_ddl`（不带 db 子句、无手写
+  table_ddl.dul 的 TRUNCATE 场景）此前恒报 "no database selected"——
+  同会话先跑 unload dict 也不生效。补齐解析步骤后手册承诺成立：配置
+  database 即可省略 db 子句；db 子句与 config 同库放行、异库响亮拒绝，
+  绝不静默换库
+- **`extract free page ext <N,N,...>` 定点提取接通**：使用手册记载的
+  指定碎片提取形态此前在命令分派层不可达（恒 Unknown command），本版
+  接通——大污染测试床上可定点提取目标碎片，避免全网捞取的巨型产物
+- **XFS 目录树扫描（P3）父节点反查 O(N²)→哈希**：汇总段对每个路径
+  线性扫全表反查父 inode，多块磁盘/大容量文件系统（数十万路径）下
+  纯 CPU 空转数十分钟形同挂死；改为路径哈希反查后同场景完整跑通，
+  新旧版本全部扫描产物逐字节一致
+
+### 改进
+
+- **extract 期覆写复验（页指纹）**：扫描为每个确认的数据库页记录
+  (LSN, 整页 FNV-1a64) 至 {ext4|xfs}_page_fp.dul；extract 复读比对，
+  扫描到抽取之间被复用/覆写的页（如同结构表占用后改写）自动跳过并
+  WARN 计数，绝不静默导出他人数据；哈希为最终裁决（裸写/撕裂写也现
+  形），LSN 为引擎覆写强信号。指纹文件缺失（旧版扫描产物）提示后
+  放行，向后兼容。实测：标记覆写 8K 页，旧版静默混入恢复产物，新版
+  精确跳过该页（ext 恰少 1 页）+ WARN；XFS 真实磁盘 684 页全量
+  verified；PG17/VastBase/XFS 三环境 DROP+TRUNCATE 恢复均 3000/3000
+- **ext4_free_ext_single.dul 移除**：零读取的调试遗留产物，每次扫描
+  白写一份逐页文件（与已删的 ext4_vbpages.dul 同类）
+- `extract xfs` / `extract ext4` 遗留空壳拆除（分派层直接拒绝并指引现行
+  命令）；退役子动词的用户提示与 .dul 头全面清退，统一指向 `scan
+  filesystem`；logminer help 补 `[db <name>]` 选项行（10-16 的提示清理
+  内容随本版一并发布）
+- obj 加载注释记录 UNLOGGED 边界：UNLOGGED 语义在 relpersistence，活库
+  CHECKPOINT 后页仍可不落盘，导出 0 行是诚实抢救非 bug
+
+### 验证
+
+- 全类型 unload 矩阵：PG17 与 VastBase 双引擎，17 列常见类型（int2/4/8、
+  float4/8、numeric、char/varchar/text、bool、date/time/timestamp/
+  timestamptz、interval、bytea、uuid）多环境实测，输出与库内真值逐字节
+  对账一致（VastBase float8 列输出 17 位最短往返表示，与该内核
+  extra_float_digits=2 下的显示逐位一致，位级无损）
+- DROP / TRUNCATE free 页扫描恢复：双引擎（PG17 / VastBase）× DROP / TRUNCATE
+  四场景实测，各 3000 行经扫描-提取-恢复全链路导出，与库内真值逐行精确一致；
+  同结构手写 DDL 探针可恢复字典中已无的 DROP 表。注意：ext4 空闲区清单是
+  unload dict 时点的快照，请在事故发生后执行 unload dict（与使用手册一致）
+
+
 ## v1.1.13 (2026-10-16)
 
 ### 修复 — logminer

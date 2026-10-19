@@ -10,13 +10,13 @@ vbdul 是一款 VastBase/openGauss 数据库应急数据恢复工具，类似 Or
 
 # 使用手册
 
-适用版本：v1.1.13 及以上
+适用版本：v1.1.14 及以上
 
 ## 1. 部署
 
 ```bash
-tar xzf vbdul-1.1.13-x86_64.tar.gz        # aarch64 服务器用 vbdul-1.1.13-aarch64.tar.gz
-cd vbdul-1.1.13-x86_64
+tar xzf vbdul-1.1.14-x86_64.tar.gz        # aarch64 服务器用 vbdul-1.1.14-aarch64.tar.gz
+cd vbdul-1.1.14-x86_64
 vi config.dul                             # 按第 2 节配置
 ./vbdul
 ```
