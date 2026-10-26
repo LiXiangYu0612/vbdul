@@ -1,6 +1,6 @@
-# vbdul - VastBase/openGauss 数据应急恢复工具
+# vbdul - VastBase 数据应急恢复工具
 
-vbdul 是一款 VastBase/openGauss 数据库应急数据恢复工具，类似 Oracle ODU。在数据库无法启动、误删表/数据、无备份的极端场景下，直接从磁盘数据文件中抢救恢复数据。
+vbdul 是一款 VastBase 数据库应急数据恢复工具，类似 Oracle ODU。在数据库无法启动、误删表/数据、无备份的极端场景下，直接从磁盘数据文件中抢救恢复数据。
 
 ## 适用场景
 
@@ -52,9 +52,9 @@ db_version 取值：
 | vastbase | v0 | E100 V3（AtlasDB 3.0.3.8，PG11 内核） |
 | vastbase | v1 | E100 V4（PG14 内核） |
 | vastbase | v2 | E100 V5（PG16 内核） |
-| vastbase | v3 | G100 2215/308/309（openGauss 内核） |
+| vastbase | v3 | G100 2215/308/309（VastBase 内核） |
 | vastbase | v5 | G100 V5（PG17 内核） |
-| vastbase | v6 | G100 2.2.5（openGauss 内核） |
+| vastbase | v6 | G100 2.2.5（VastBase 内核） |
 | postgresql | pg10 ~ pg17 | 对应 PostgreSQL 10 ~ 17 |
 
 ### 2.1 默认（不配置 database）与配置了的区别
