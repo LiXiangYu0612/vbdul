@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.20 (2026-11-11)
+
+unload dict backup（probackup 备份字典卸载）稳定性修复，与 catalog 文件定位策略收紧。
+
+### unload dict backup 修复
+
+- 修复对 PG 系内核备份（pg_probackup 2.x 全备格式）解析时的进程崩溃与系统表列值错位：此前备份路径按固定列布局解析，遇到列集不同的内核版本即整体错位，异常数据可进一步触发栈保护终止进程。
+- 备份路径与活库路径统一改为按列名提取系统表字段，兼容各内核列集差异；事务可见性与 OID 判定按数据库类型分派，不再混用。
+- 修复 pg_namespace、pg_partition 等 catalog 在备份中定位失败（报 cannot locate relation file）导致 backup_schema.dul、backup_part.dul 整体缺失的问题。
+
+### catalog 文件定位收紧
+
+- 废除"bootstrap 系统表 filenode=relid"的猜测兜底。多版本实测表明该假设不成立（部分版本的安装过程会重写系统表，实际 filenode 与 relid 无关），猜错时会打开错误的文件甚至读出过期数据。现在映射类系统表只在 pg_filenode.map 中查，非映射类只在 pg_class.relfilenode 中查，均未命中时明确报错并指出字典链断裂，不再猜测。
+- pg_filenode.map 条目数上限改为按文件实际尺寸推算，不再固定为 64：此前个别版本（老 magic 格式、103 条目布局）的 map 文件被整体拒读。现对已见的 62/63/64/103/510 条目布局均可正确解析。
+
 ## v1.1.19 (2026-11-10)
 
 logminer 小范围挖取的基线重建修复与批量插入解析修复。
